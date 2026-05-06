@@ -1,38 +1,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAuth, UserRole, ROLE_CREDENTIALS } from '@/contexts/AuthContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Building2, User, Lock, Mail,
-  Shield, HardHat, Warehouse, ShoppingCart,
-  Settings, Wrench, Calculator, FolderKanban,
-  Eye, EyeOff, AlertCircle, CheckCircle2,
+  Eye, EyeOff, AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-
-const roleIcons: Record<UserRole, React.ElementType> = {
-  admin:        Shield,
-  chef_projet:  HardHat,
-  storage:      Warehouse,
-  purchase:     ShoppingCart,
-  gestionnaire: Settings,
-  technique:    Wrench,
-  comptable:    Calculator,
-  resp_projets: FolderKanban,
-};
-
-const roleColors: Record<UserRole, string> = {
-  admin:        'from-blue-600 to-blue-800',
-  chef_projet:  'from-teal-500 to-teal-700',
-  storage:      'from-amber-500 to-amber-700',
-  purchase:     'from-emerald-500 to-emerald-700',
-  gestionnaire: 'from-indigo-500 to-indigo-700',
-  technique:    'from-orange-500 to-orange-700',
-  comptable:    'from-rose-500 to-rose-700',
-  resp_projets: 'from-cyan-500 to-cyan-700',
-};
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
@@ -51,30 +27,6 @@ export default function LoginPage() {
   const [error, setError]                     = useState('');
 
   const isRtl = i18n.language === 'ar';
-  const roles: UserRole[] = [
-    'admin', 'chef_projet', 'storage', 'purchase',
-    'gestionnaire', 'technique', 'comptable', 'resp_projets',
-  ];
-
-  // ─── Quick demo login ────────────────────────────────────────────────────
-  // Uses ROLE_CREDENTIALS as the single source of truth — no duplicate map.
-  const handleQuickLogin = async (role: UserRole) => {
-    setError('');
-    setLoading(true);
-    const cred = ROLE_CREDENTIALS[role];
-    try {
-      const success = await login(cred.email, cred.password);
-      if (success) {
-        navigate('/dashboard');
-      } else {
-        setError(t('login.error') || 'Login failed. Please check your credentials.');
-      }
-    } catch {
-      setError(t('login.error') || 'An error occurred during login.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // ─── Manual login ────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
@@ -181,45 +133,8 @@ export default function LoginPage() {
           </motion.div>
         )}
 
-        {/* ── Demo access buttons (moved ABOVE the form) ── */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="mb-8 bg-white/5 backdrop-blur rounded-2xl p-5 border border-white/10"
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <CheckCircle2 className="w-4 h-4 text-green-400" />
-            <h2 className="text-base font-bold text-primary-foreground">
-              Demo Access — click any role to enter instantly
-            </h2>
-          </div>
-          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-            {roles.map((role, i) => {
-              const Icon = roleIcons[role];
-              return (
-                <motion.button
-                  key={role}
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.3 + i * 0.05 }}
-                  onClick={() => handleQuickLogin(role)}
-                  disabled={loading}
-                  className={`flex flex-col items-center justify-center gap-1 p-3 rounded-xl bg-gradient-to-br ${roleColors[role]} text-white text-xs font-semibold shadow-md hover:scale-[1.07] active:scale-[0.95] transition-transform disabled:opacity-50 disabled:cursor-not-allowed`}
-                  title={t(`roles.${role}`)}
-                >
-                  <Icon className="w-5 h-5" />
-                  <span className="text-[10px] text-center leading-tight line-clamp-2">
-                    {t(`roles.${role}`)}
-                  </span>
-                </motion.button>
-              );
-            })}
-          </div>
-        </motion.div>
-
-        {/* ── Login / Signup form + info panel ── */}
-        <div className="grid md:grid-cols-2 gap-6">
+        {/* ── Login / Signup form ── */}
+        <div className="grid md:grid-cols-1 gap-6">
           {/* Form */}
           <motion.div
             initial={{ opacity: 0, x: isRtl ? 30 : -30 }}
@@ -398,50 +313,6 @@ export default function LoginPage() {
                 </Button>
               </form>
             )}
-          </motion.div>
-
-          {/* Info panel */}
-          <motion.div
-            initial={{ opacity: 0, x: isRtl ? -30 : 30 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.4 }}
-            className="bg-card/95 backdrop-blur-xl rounded-2xl p-8 border border-border/50"
-          >
-            <h2 className="text-xl font-bold text-foreground mb-6">Helpful Information</h2>
-            <div className="space-y-5 text-sm">
-              <div>
-                <h3 className="font-semibold text-blue-600 mb-1">Demo Access</h3>
-                <p className="text-muted-foreground">
-                  Click any role button above to log in instantly without entering credentials.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-semibold text-blue-600 mb-1">Real Database Login</h3>
-                <p className="text-muted-foreground">
-                  Enter your Supabase email and password in the login form. Your role and profile
-                  are loaded automatically from the database.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-semibold text-blue-600 mb-1">Demo Credentials</h3>
-                <div className="space-y-1 font-mono text-xs text-muted-foreground">
-                  <p>admin@admin.com / admin123</p>
-                  <p>chef@projet.com / chef123</p>
-                  <p>stockage@stockage.com / stockage123</p>
-                  <p>achats@achats.com / achats123</p>
-                  <p>comptable@comptable.com / comptable123</p>
-                  <p>gest@erp.com / gest123</p>
-                  <p>tech@erp.com / tech123</p>
-                  <p>resp@erp.com / resp123</p>
-                </div>
-              </div>
-              <div>
-                <h3 className="font-semibold text-blue-600 mb-1">Language</h3>
-                <p className="text-muted-foreground">
-                  Switch between Arabic and French using the button at the top.
-                </p>
-              </div>
-            </div>
           </motion.div>
         </div>
       </motion.div>
