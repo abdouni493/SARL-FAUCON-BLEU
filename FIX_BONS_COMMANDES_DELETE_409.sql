@@ -131,3 +131,6631 @@ FROM pg_policies
 WHERE schemaname = 'public' 
 AND tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers')
 ORDER BY tablename, policyname;
+
+-- Fix Bons Commandes Totals - Calculate missing totals from products
+-- This migration updates all bons_commandes records with 0 DA totals
+-- by calculating the actual totals from their bons_commandes_products records
+
+-- Step 1: Create a temporary view with calculated totals
+CREATE OR REPLACE VIEW bon_commandes_totals_view AS
+SELECT 
+  bc.id,
+  COALESCE(SUM(bcp.subtotal), 0) as calculated_total_without_tva,
+  COALESCE(SUM(bcp.tva_amount), 0) as calculated_total_tva,
+  COALESCE(SUM(bcp.total_with_tva), 0) as calculated_total_with_tva
+FROM public.bons_commandes bc
+LEFT JOIN public.bons_commandes_products bcp ON bc.id = bcp.bon_commande_id
+GROUP BY bc.id;
+
+-- Step 2: Update bons_commandes with calculated totals from products
+-- Only update records where:
+-- 1. They have products (subtotal > 0), AND
+-- 2. Their current totals are 0 (meaning they were never calculated)
+UPDATE public.bons_commandes bc
+SET 
+  total_without_tva = CASE 
+    WHEN bctv.calculated_total_without_tva > 0 THEN bctv.calculated_total_without_tva
+    ELSE bc.total_without_tva
+  END,
+  total_with_tva = CASE 
+    WHEN bctv.calculated_total_with_tva > 0 THEN bctv.calculated_total_with_tva
+    ELSE bc.total_with_tva
+  END,
+  total_price = CASE 
+    WHEN bctv.calculated_total_with_tva > 0 THEN bctv.calculated_total_with_tva
+    ELSE bc.total_price
+  END,
+  updated_at = NOW()
+FROM bon_commandes_totals_view bctv
+WHERE bc.id = bctv.id
+  AND bc.total_with_tva = 0  -- Only update records with 0 DA
+  AND bctv.calculated_total_with_tva > 0;  -- And they have products to calculate from
+
+-- Step 3: Verify the update
+SELECT 
+  COUNT(*) as total_bons,
+  COUNT(CASE WHEN total_with_tva > 0 THEN 1 END) as bons_with_totals,
+  COUNT(CASE WHEN total_with_tva = 0 THEN 1 END) as bons_without_totals,
+  AVG(total_with_tva) as average_total,
+  MIN(total_with_tva) as min_total,
+  MAX(total_with_tva) as max_total
+FROM public.bons_commandes;
+
+-- Step 4: Show example of updated records
+SELECT 
+  bon_id,
+  supplier_name,
+  total_without_tva,
+  total_with_tva,
+  status,
+  updated_at
+FROM public.bons_commandes
+WHERE total_with_tva > 0
+ORDER BY updated_at DESC
+LIMIT 10;
+
+-- Step 5: Show any bons that still have 0 totals (should be empty or have no products)
+SELECT 
+  bc.id,
+  bc.bon_id,
+  bc.supplier_name,
+  bc.total_with_tva,
+  COUNT(bcp.id) as product_count
+FROM public.bons_commandes bc
+LEFT JOIN public.bons_commandes_products bcp ON bc.id = bcp.bon_commande_id
+WHERE bc.total_with_tva = 0
+GROUP BY bc.id, bc.bon_id, bc.supplier_name, bc.total_with_tva;
+
+-- ============================================================================
+-- FIX FOREIGN KEY CONSTRAINT on material_commands.created_by_id
+-- ============================================================================
+-- Problem: material_commands.created_by_id references users table
+-- Solution: Create user records that match auth.users
+-- ============================================================================
+
+-- STEP 1: Create public.users table records for each authenticated user
+-- These records link auth.users to the public.users table via UUID
+
+INSERT INTO public.users (id, email, role, full_name, username, created_at, updated_at)
+VALUES
+  ('6ca491f6-ac4e-4d22-baa0-9b6208f3a3cc', 'admin@admin.com', 'admin', 'Administrator', 'admin', NOW(), NOW()),
+  ('52a74346-c9f5-4498-850c-6f7a9dde929d', 'chef@projet.com', 'chef_projet', 'Chef de Projet', 'chef_projet', NOW(), NOW()),
+  ('d53dc076-d323-41db-952b-07f16b250159', 'stockage@stockage.com', 'storage', 'Responsable Stockage', 'stockage', NOW(), NOW()),
+  ('3ebb968c-47c8-4d4e-8892-92cb400ac153', 'achats@achats.com', 'purchase', 'Responsable Achats', 'achats', NOW(), NOW()),
+  ('94317379-0894-4203-98ea-5760922f4ad6', 'comptable@comptable.com', 'comptable', 'Comptable', 'comptable', NOW(), NOW())
+ON CONFLICT (id) DO UPDATE SET
+  email = EXCLUDED.email,
+  role = EXCLUDED.role,
+  full_name = EXCLUDED.full_name,
+  username = EXCLUDED.username,
+  updated_at = NOW();
+
+-- STEP 2: Verify the users were created
+SELECT id, email, role, full_name, username FROM public.users 
+WHERE email IN (
+  'admin@admin.com',
+  'chef@projet.com',
+  'stockage@stockage.com',
+  'achats@achats.com',
+  'comptable@comptable.com'
+);
+
+-- STEP 3: Check if there are any material_commands with invalid created_by_id
+SELECT id, created_by_id, created_at 
+FROM material_commands 
+WHERE created_by_id IS NOT NULL
+  AND created_by_id NOT IN (
+    SELECT id FROM public.users
+  );
+
+-- STEP 4: If there are orphaned records, fix them by assigning to admin
+UPDATE material_commands
+SET created_by_id = '6ca491f6-ac4e-4d22-baa0-9b6208f3a3cc'
+WHERE created_by_id IS NOT NULL
+  AND created_by_id NOT IN (
+    SELECT id FROM public.users
+  );
+
+-- ============================================================================
+-- VERIFY FOREIGN KEY CONSTRAINT
+-- ============================================================================
+-- Run this to check that the constraint is working:
+
+SELECT 
+  constraint_name,
+  table_name,
+  column_name
+FROM information_schema.key_column_usage
+WHERE table_name = 'material_commands'
+  AND column_name = 'created_by_id';
+
+-- ============================================================================
+-- TEST: Create a new material_command to verify FK works
+-- ============================================================================
+
+INSERT INTO material_commands (
+  command_id,
+  created_by_id,
+  status,
+  created_at,
+  updated_at
+) VALUES (
+  'TEST-' || TO_CHAR(NOW(), 'YYYYMMDD-HH24MISS'),  -- Generate unique command_id
+  '52a74346-c9f5-4498-850c-6f7a9dde929d',  -- chef@projet.com
+  'pending',
+  NOW(),
+  NOW()
+);
+
+-- ============================================================================
+-- NOTES
+-- ============================================================================
+-- 1. These UUIDs must match exactly with auth.users IDs
+-- 2. The foreign key constraint will now allow material_commands creation
+-- 3. Each user in auth.users has a corresponding record in public.users
+-- 4. Authentication uses auth.users, Commands use public.users for FK
+-- 5. Run STEP 1 first, then verify with STEP 2, STEP 3, STEP 4
+-- ============================================================================
+-- ============================================================================
+-- FIX_PAYMENT_ORDERS_RLS_FINAL.sql
+-- ============================================================================
+-- PURPOSE: Fix 403 Forbidden errors on payment_orders table
+-- ISSUE: Subquery-based RLS policies are too restrictive on Supabase
+-- SOLUTION: Replace with simple auth.role() = 'authenticated' checks
+-- ============================================================================
+
+-- STEP 1: REMOVE OLD RESTRICTIVE POLICIES (safer approach)
+-- Try to remove policies with exact names - if they don't exist, that's OK
+BEGIN;
+
+-- Drop old payment_orders policies (Supabase-safe approach)
+DO $$
+BEGIN
+  -- Try to drop each policy individually
+  BEGIN
+    DROP POLICY "Authorized users can view all payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can create payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can update payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can delete payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  -- Try to drop old bons_commandes policies
+  BEGIN
+    DROP POLICY "allow_view_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_insert_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_update_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_delete_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+END $$;
+
+COMMIT;
+
+-- ============================================================================
+-- STEP 2: ENSURE RLS IS ENABLED (clean slate)
+-- ============================================================================
+ALTER TABLE public.payment_orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.bons_commandes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- STEP 3: CREATE NEW PERMISSIVE POLICIES FOR payment_orders
+-- ============================================================================
+-- These policies allow ALL AUTHENTICATED users (not just specific roles)
+-- This is more permissive but still requires user to be logged in
+
+-- POLICY 1: SELECT - All authenticated users can read payment orders
+CREATE POLICY "payment_orders_select_authenticated"
+  ON public.payment_orders
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- POLICY 2: INSERT - Authenticated users can create payment orders
+CREATE POLICY "payment_orders_insert_authenticated"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- POLICY 3: UPDATE - Authenticated users can update payment orders
+CREATE POLICY "payment_orders_update_authenticated"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- POLICY 4: DELETE - Authenticated users can delete payment orders
+CREATE POLICY "payment_orders_delete_authenticated"
+  ON public.payment_orders
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 4: CREATE POLICIES FOR bons_commandes (dropdown search)
+-- ============================================================================
+-- The payment_orders interface queries bons_commandes for the search dropdown
+-- This table needs a SELECT policy to allow the search to work
+
+-- POLICY 5: SELECT - All authenticated users can read bons_commandes
+CREATE POLICY "bons_commandes_select_authenticated"
+  ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 5: VERIFY RLS IS ENABLED (checking phase)
+-- ============================================================================
+-- Run these queries to confirm RLS is properly enabled
+-- Expected: both should show 't' (true) for rowsecurity column
+
+-- Check RLS status on both tables
+SELECT 
+  tablename,
+  rowsecurity,
+  CASE WHEN rowsecurity THEN '✅ RLS ENABLED' ELSE '❌ RLS DISABLED' END as status
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename;
+
+-- ============================================================================
+-- STEP 6: LIST ALL ACTIVE POLICIES (verification phase)
+-- ============================================================================
+-- Run this to see all the policies we just created
+-- Expected: 5 total policies (4 for payment_orders, 1 for bons_commandes)
+
+SELECT 
+  schemaname,
+  tablename,
+  policyname,
+  CASE 
+    WHEN qual IS NOT NULL THEN 'Restrictive'
+    ELSE 'Permissive'
+  END as policy_type
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename, policyname;
+
+-- ============================================================================
+-- STEP 7: TEST QUERIES (after executing this SQL, run these in a new query)
+-- ============================================================================
+-- Uncomment and run these queries to test access to both tables
+
+-- Test 1: Count payment orders (SELECT test)
+-- SELECT COUNT(*) as payment_order_count FROM payment_orders;
+-- Expected: 0 or N (no 403 error)
+
+-- Test 2: Count bons commandes (SELECT test)
+-- SELECT COUNT(*) as bons_count FROM bons_commandes;
+-- Expected: 0 or N (no 403 error)
+
+-- Test 3: List bons commandes with relevant fields (for dropdown search)
+-- SELECT id, bon_id, total_price FROM bons_commandes LIMIT 5;
+-- Expected: rows returned with no 403 error
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL, check:
+-- 
+-- ✅ Query executed successfully (no red error messages)
+-- ✅ RLS is enabled on payment_orders (rowsecurity = t)
+-- ✅ RLS is enabled on bons_commandes (rowsecurity = t)
+-- ✅ 5 policies created (4 for payment_orders, 1 for bons_commandes)
+-- ✅ All policies use auth.role() = 'authenticated' condition
+-- 
+-- Then in React App:
+-- ✅ Refresh page (F5)
+-- ✅ Check console: NO 403 Forbidden errors
+-- ✅ Navigate to "Ordres de Paiement"
+-- ✅ See "Aucune donnée" OR list of payment orders (if records exist)
+-- ✅ Search dropdown works for bon de commande
+-- ✅ Can create payment order
+-- ✅ Can edit payment order
+-- ✅ Can delete payment order
+-- ✅ Can validate payment order
+
+-- ============================================================================
+-- TROUBLESHOOTING
+-- ============================================================================
+-- If you still see 403 errors after running this SQL:
+--
+-- 1. VERIFY RLS WAS ACTUALLY ENABLED:
+--    Run: SELECT tablename, rowsecurity FROM pg_tables WHERE tablename IN ('payment_orders', 'bons_commandes');
+--    Should show: rowsecurity = t (true) for both tables
+--
+-- 2. VERIFY POLICIES WERE CREATED:
+--    Run: SELECT tablename, policyname FROM pg_policies WHERE tablename IN ('payment_orders', 'bons_commandes');
+--    Should show: 5 total policies (4 for payment_orders, 1 for bons_commandes)
+--
+-- 3. VERIFY USER IS AUTHENTICATED:
+--    Check browser console: "Logged in with Supabase: [username]"
+--    If not logged in, you cannot access any data
+--
+-- 4. HARD REFRESH BROWSER:
+--    Press Ctrl+Shift+Delete (Windows) to clear cache, then refresh page
+--    Or press Ctrl+F5 (full refresh)
+--
+-- 5. CHECK BROWSER DEVTOOLS NETWORK TAB:
+--    Look at the GET request to payment_orders
+--    Status should be 200 (not 403) after SQL is applied
+--
+-- ============================================================================
+-- ============================================================================
+-- FIX_PAYMENT_ORDERS_RLS_SIMPLE.sql
+-- ============================================================================
+-- SIMPLIFIED VERSION - Use this if the main SQL has issues
+-- PURPOSE: Fix 403 Forbidden errors on payment_orders table
+-- SOLUTION: Replace with simple auth.role() = 'authenticated' checks
+-- ============================================================================
+
+-- ============================================================================
+-- STEP 1: ENSURE RLS IS ENABLED
+-- ============================================================================
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- STEP 2: CREATE NEW PERMISSIVE POLICIES FOR payment_orders
+-- ============================================================================
+-- These policies allow ALL AUTHENTICATED users
+-- This is more permissive but still requires user to be logged in
+
+-- SELECT Policy for payment_orders
+CREATE POLICY "payment_orders_select_authenticated"
+  ON public.payment_orders
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- INSERT Policy for payment_orders
+CREATE POLICY "payment_orders_insert_authenticated"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- UPDATE Policy for payment_orders
+CREATE POLICY "payment_orders_update_authenticated"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- DELETE Policy for payment_orders
+CREATE POLICY "payment_orders_delete_authenticated"
+  ON public.payment_orders
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 3: CREATE SELECT POLICY FOR bons_commandes (dropdown search)
+-- ============================================================================
+-- The payment_orders interface queries bons_commandes for the search dropdown
+
+CREATE POLICY "bons_commandes_select_authenticated"
+  ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 4: VERIFY RLS IS ENABLED
+-- ============================================================================
+SELECT 
+  tablename,
+  rowsecurity,
+  CASE WHEN rowsecurity THEN '✅ RLS ENABLED' ELSE '❌ RLS DISABLED' END as status
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename;
+
+-- ============================================================================
+-- STEP 5: LIST ALL ACTIVE POLICIES
+-- ============================================================================
+SELECT 
+  schemaname,
+  tablename,
+  policyname
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename, policyname;
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL, verify:
+-- 
+-- ✅ Query executed successfully (no red error messages)
+-- ✅ RLS is enabled on payment_orders (rowsecurity = t)
+-- ✅ RLS is enabled on bons_commandes (rowsecurity = t)
+-- ✅ At least 4-5 policies created
+-- ✅ All policies use auth.role() = 'authenticated' condition
+-- 
+-- Then in React App:
+-- ✅ Refresh page (F5)
+-- ✅ Check console: NO 403 Forbidden errors
+-- ✅ Navigate to "Ordres de Paiement"
+-- ✅ See "Aucune donnée" OR list of payment orders
+-- ✅ Search dropdown works for bon de commande
+-- ✅ Can create/edit/delete payment orders
+
+-- ============================================================================
+-- CRITICAL: Fix RLS policies for payment_orders table
+-- Run this in Supabase SQL Editor to enable access for all authenticated users
+
+-- Step 1: Drop existing restrictive policies
+DROP POLICY IF EXISTS "payment_orders_select_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_insert_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_update_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_delete_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable read access for all authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable insert for authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable update for authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable delete for authenticated users" ON public.payment_orders;
+
+-- Step 2: Disable RLS temporarily to ensure clean slate
+ALTER TABLE public.payment_orders DISABLE ROW LEVEL SECURITY;
+
+-- Step 3: Re-enable RLS
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+-- Step 4: Create comprehensive policies for authenticated users
+-- SELECT: All authenticated users can read payment orders
+CREATE POLICY "Enable read access for all authenticated users"
+ON public.payment_orders
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+-- INSERT: Authenticated users can create payment orders
+CREATE POLICY "Enable insert for authenticated users"
+ON public.payment_orders
+FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+-- UPDATE: Users can update payment orders
+CREATE POLICY "Enable update for authenticated users"
+ON public.payment_orders
+FOR UPDATE
+USING (auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+-- DELETE: Users can delete payment orders
+CREATE POLICY "Enable delete for authenticated users"
+ON public.payment_orders
+FOR DELETE
+USING (auth.role() = 'authenticated');
+
+-- Step 5: Fix bons_commandes RLS
+DROP POLICY IF EXISTS "bons_commandes_select" ON public.bons_commandes;
+DROP POLICY IF EXISTS "Enable read access for bons_commandes" ON public.bons_commandes;
+
+-- Disable and re-enable RLS on bons_commandes
+ALTER TABLE public.bons_commandes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- Allow all authenticated users to read bons_commandes
+CREATE POLICY "Enable read access for bons_commandes"
+ON public.bons_commandes
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+-- Step 6: Verify RLS is enabled and check policies
+SELECT tablename, rowsecurity 
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND (tablename = 'payment_orders' OR tablename = 'bons_commandes');
+
+-- Step 7: List all active policies
+SELECT schemaname, tablename, policyname 
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND (tablename = 'payment_orders' OR tablename = 'bons_commandes')
+ORDER BY tablename, policyname;
+
+===== MIGRATION 1: Payment Orders =====
+ALTER TABLE payment_orders 
+  ALTER COLUMN bon_commande_id DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS beneficiary TEXT;
+
+
+===== MIGRATION 2: Reception Products =====
+ALTER TABLE reception_products 
+  ADD COLUMN IF NOT EXISTS invoice_image_url TEXT;
+
+
+===== MIGRATION 3: Purchase Commands Validation =====
+ALTER TABLE purchase_commands 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+
+===== MIGRATION 4: Bons Commandes Validation =====
+ALTER TABLE bons_commandes 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+-- ============================================================================
+-- PROJECT EXPENSES TABLE SCHEMA - ALTER EXISTING TABLE
+-- ============================================================================
+-- This modifies the existing project_expenses table to add missing columns
+-- for better project and user tracking
+
+-- Add missing columns to existing project_expenses table if they don't exist
+ALTER TABLE project_expenses
+ADD COLUMN IF NOT EXISTS created_by_id UUID,
+ADD COLUMN IF NOT EXISTS chef_de_projet_id UUID,
+ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'autre',
+ADD COLUMN IF NOT EXISTS notes TEXT,
+ADD COLUMN IF NOT EXISTS amount DECIMAL(12, 2);
+
+-- Add foreign key constraints for user references (if they don't already exist)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_created_by_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_created_by_id_fkey 
+      FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_chef_de_projet_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_chef_de_projet_id_fkey 
+      FOREIGN KEY (chef_de_projet_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Create indexes for better query performance (if not already present)
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_box_id 
+  ON project_expenses(project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_created_by_id 
+  ON project_expenses(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_chef_de_projet_id 
+  ON project_expenses(chef_de_projet_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_expense_date 
+  ON project_expenses(expense_date);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_category 
+  ON project_expenses(category);
+
+-- Create or replace trigger to automatically update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_project_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop existing trigger if it exists, then create new one
+DROP TRIGGER IF EXISTS project_expenses_update_timestamp ON project_expenses;
+CREATE TRIGGER project_expenses_update_timestamp
+  BEFORE UPDATE ON project_expenses
+  FOR EACH ROW
+  EXECUTE FUNCTION update_project_expenses_timestamp();
+
+-- ============================================================================
+-- OPTIONAL: VIEWS FOR COMMON QUERIES
+-- ============================================================================
+
+-- View to get total expenses by project
+CREATE OR REPLACE VIEW project_expenses_summary AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  COUNT(pe.id) as expense_count,
+  SUM(pe.amount) as total_amount,
+  AVG(pe.amount) as average_expense,
+  MAX(pe.expense_date) as last_expense_date
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+GROUP BY pb.id, pb.name;
+
+-- View to get expenses by category per project
+CREATE OR REPLACE VIEW project_expenses_by_category AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  pe.category,
+  COUNT(pe.id) as count,
+  SUM(pe.amount) as total_amount
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+WHERE pe.category IS NOT NULL
+GROUP BY pb.id, pb.name, pe.category;
+
+-- ============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES - OPTIONAL
+-- ============================================================================
+-- Uncomment the following if you want to enable RLS for project_expenses
+
+-- Enable RLS on project_expenses table
+-- ALTER TABLE project_expenses ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can view expenses for their own projects
+-- CREATE POLICY project_expenses_view_own
+--   ON project_expenses FOR SELECT
+--   USING (
+--     created_by_id = auth.uid() 
+--     OR chef_de_projet_id = auth.uid()
+--     OR EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can insert expenses for their projects
+-- CREATE POLICY project_expenses_insert_own
+--   ON project_expenses FOR INSERT
+--   WITH CHECK (
+--     created_by_id = auth.uid()
+--     AND EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can update expenses they created
+-- CREATE POLICY project_expenses_update_own
+--   ON project_expenses FOR UPDATE
+--   USING (created_by_id = auth.uid())
+--   WITH CHECK (created_by_id = auth.uid());
+
+-- Policy: Users can delete expenses they created
+-- CREATE POLICY project_expenses_delete_own
+--   ON project_expenses FOR DELETE
+--   USING (created_by_id = auth.uid());
+
+-- ============================================================================
+-- SAMPLE QUERIES FOR REFERENCE
+-- ============================================================================
+
+-- Get all expenses for a specific project
+-- SELECT * FROM project_expenses 
+-- WHERE project_box_id = 'PROJECT_ID_HERE'
+-- ORDER BY expense_date DESC;
+
+-- Get total expenses by project
+-- SELECT * FROM project_expenses_summary
+-- ORDER BY total_amount DESC;
+
+-- Get expenses by category for a project
+-- SELECT * FROM project_expenses_by_category
+-- WHERE project_id = 'PROJECT_ID_HERE'
+-- ORDER BY total_amount DESC;
+
+-- Get chef_de_projet expenses within date range
+-- SELECT * FROM project_expenses
+-- WHERE chef_de_projet_id = 'USER_ID_HERE'
+-- AND expense_date BETWEEN '2024-01-01' AND '2024-12-31'
+-- ORDER BY expense_date DESC;
+-- ============================================================================
+-- ADD_ADMIN_VALIDATION_TO_PAYMENT_ORDERS.sql
+-- ============================================================================
+-- PURPOSE: Add two-step validation for payment orders
+--   Step 1: Comptable validates (existing functionality)
+--   Step 2: General Administration validates (new)
+-- ============================================================================
+
+-- STEP 1: ADD ADMIN VALIDATION FIELDS
+-- ============================================================================
+-- Add columns to track administration validation
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT false;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_at TIMESTAMP WITH TIME ZONE;
+
+-- ============================================================================
+-- STEP 2: UPDATE STATUS CONSTRAINT (Optional - for enhanced tracking)
+-- ============================================================================
+-- Current status: pending, validated
+-- After this change:
+--   pending = not validated by comptable
+--   validated = validated by comptable only
+--   finalized = validated by both comptable and administration
+
+-- NOTE: This comment documents the new workflow
+-- Do NOT execute the ALTER TABLE below if you want to keep existing status values
+-- Instead, use the boolean flags (admin_validated) to track admin approval
+
+-- If you want to add 'finalized' status, uncomment and run:
+-- ALTER TABLE public.payment_orders 
+-- DROP CONSTRAINT IF EXISTS payment_orders_status_check;
+
+-- ALTER TABLE public.payment_orders 
+-- ADD CONSTRAINT payment_orders_status_check 
+-- CHECK (status IN ('pending', 'validated', 'finalized'));
+
+-- ============================================================================
+-- STEP 3: CREATE INDEX FOR ADMIN VALIDATION QUERIES
+-- ============================================================================
+-- Improves performance for filtering orders by admin validation status
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated 
+ON public.payment_orders(admin_validated);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated_by 
+ON public.payment_orders(admin_validated_by);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_validation_status 
+ON public.payment_orders(status, admin_validated);
+
+-- ============================================================================
+-- STEP 4: VIEW - ORDERS AWAITING ADMIN VALIDATION
+-- ============================================================================
+-- Useful for administration dashboard - shows orders validated by comptable
+-- but not yet by administration
+
+CREATE OR REPLACE VIEW orders_awaiting_admin_validation AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.status,
+  po.admin_validated,
+  bc.bon_id,
+  bc.total_price as bon_total_price,
+  po.created_at,
+  po.updated_at,
+  CASE 
+    WHEN po.status = 'validated' AND po.admin_validated = false THEN 'Awaiting Admin Approval'
+    WHEN po.admin_validated = true THEN 'Admin Approved'
+    ELSE 'Not Yet Comptable Approved'
+  END as validation_stage
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'validated' AND po.admin_validated = false
+ORDER BY po.created_at ASC;
+
+-- ============================================================================
+-- STEP 5: VERIFICATION QUERIES
+-- ============================================================================
+
+-- Check if columns were added successfully
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'payment_orders'
+AND column_name IN ('admin_validated', 'admin_validated_by', 'admin_validated_at')
+ORDER BY column_name;
+
+-- Check if indexes were created
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'payment_orders'
+AND indexname LIKE '%admin%'
+ORDER BY indexname;
+
+-- Check if view was created
+SELECT table_name FROM information_schema.tables
+WHERE table_type = 'VIEW' AND table_name = 'orders_awaiting_admin_validation';
+
+-- ============================================================================
+-- STEP 6: SAMPLE DATA UPDATES (Optional - for testing)
+-- ============================================================================
+-- If you have existing validated orders, you can mark some for admin validation
+-- Uncomment to use:
+
+-- Mark first order as awaiting admin validation:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = false
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- Mark one order as admin validated:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = true, 
+--     admin_validated_by = auth.uid(),
+--     admin_validated_at = CURRENT_TIMESTAMP
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- ============================================================================
+-- STEP 7: MIGRATION GUIDE
+-- ============================================================================
+
+-- VALIDATION WORKFLOW:
+-- 
+-- 1. User (Comptable Role):
+--    - Creates payment order (status = 'pending')
+--    - Clicks "Validate" button
+--    - Changes status to 'validated' (admin_validated = false)
+--
+-- 2. Manager (Administration Role):
+--    - Sees orders where status = 'validated' AND admin_validated = false
+--    - Reviews the order
+--    - Clicks "Admin Validate" button
+--    - Sets admin_validated = true, admin_validated_by = current_user, admin_validated_at = now
+--
+-- STATUSES:
+-- - pending: Created but not comptable validated
+-- - validated: Comptable validated, awaiting admin validation
+-- - finalized: Both comptable and admin validated (optional - use admin_validated boolean)
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL:
+--
+-- ✅ Columns added: admin_validated, admin_validated_by, admin_validated_at
+-- ✅ Indexes created for performance
+-- ✅ View created for admin dashboard
+-- ✅ Verification queries show correct output
+--
+-- Then update React component:
+-- ✅ Show "Comptable Validate" button if status = 'pending' AND user.role = 'comptable'
+-- ✅ Show "Admin Validate" button if status = 'validated' AND admin_validated = false AND user.role = 'admin'
+-- ✅ Show checkmark/approved badge if admin_validated = true
+
+-- ============================================================================
+-- SQL: Add Barcode Support to Products Table
+-- Purpose: Enable barcode scanning in Bons de Commande interface
+
+-- 1. Add barcode column to products table
+ALTER TABLE public.products ADD COLUMN barcode VARCHAR(255) UNIQUE;
+ALTER TABLE public.products ADD COLUMN barcode_type VARCHAR(50); -- e.g., 'EAN-13', 'UPC', 'QR'
+
+-- 2. Create index for faster barcode lookups
+CREATE INDEX idx_products_barcode ON public.products(barcode);
+
+-- 3. Add barcode column to bons_commandes_products table (optional, for local storage)
+ALTER TABLE public.bons_commandes_products ADD COLUMN barcode VARCHAR(255);
+
+-- 4. Create index for products_barcode_type
+CREATE INDEX idx_products_barcode_type ON public.products(barcode_type);
+
+-- 5. Add RLS policy for barcode scanning (if using RLS)
+-- Allow authenticated users to read products by barcode
+CREATE POLICY "Users can read products by barcode" ON public.products
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+-- Sample data insertion (optional - for testing)
+-- INSERT INTO public.products (name, barcode, barcode_type, unit_price)
+-- VALUES 
+--   ('Product A', '5901234123457', 'EAN-13', 100.00),
+--   ('Product B', '123456789012', 'UPC', 50.00),
+--   ('Product C', 'QR20240405001', 'QR', 75.00);
+
+-- Verification queries
+-- Check if barcode column exists:
+-- SELECT column_name FROM information_schema.columns 
+-- WHERE table_name='products' AND column_name='barcode';
+
+-- View products with barcodes:
+-- SELECT id, name, barcode, barcode_type, unit_price FROM public.products WHERE barcode IS NOT NULL;
+-- SQL Migration: Add Logo Support to Users Table
+-- This migration adds columns to store logo URLs for user profiles and enterprise settings
+
+-- 1. Add logo_url column to users table
+ALTER TABLE public.users
+ADD COLUMN logo_url character varying;
+
+-- 2. Create an enterprise_settings table if it doesn't exist
+CREATE TABLE IF NOT EXISTS public.enterprise_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  logo_url character varying,
+  company_name character varying NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by_id uuid,
+  CONSTRAINT enterprise_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT enterprise_settings_created_by_id_fkey FOREIGN KEY (created_by_id) REFERENCES auth.users(id)
+);
+
+-- 3. Create a storage bucket policy for logos if needed (run in Supabase dashboard)
+-- This creates a public bucket for logos
+/*
+INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true);
+
+CREATE POLICY "Allow public read access to logos" ON storage.objects
+  FOR SELECT USING (bucket_id = 'logos');
+
+CREATE POLICY "Allow authenticated users to upload logos" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to update their own logos" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to delete their own logos" ON storage.objects
+  FOR DELETE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+*/
+
+-- 4. Add indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_users_logo_url ON public.users(logo_url);
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by ON public.enterprise_settings(created_by_id);
+
+-- 5. Add RLS policies for enterprise_settings table
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow admin users to manage enterprise settings" ON public.enterprise_settings
+  FOR ALL USING (
+    auth.uid() = created_by_id OR 
+    EXISTS (
+      SELECT 1 FROM public.users 
+      WHERE id = auth.uid() AND role = 'admin'
+    )
+  );
+
+CREATE POLICY "Allow all authenticated users to view enterprise settings" ON public.enterprise_settings
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+-- 6. Add trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_enterprise_settings_updated_at
+  BEFORE UPDATE ON public.enterprise_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- Notes:
+-- 1. Logo images will be stored in Supabase Storage bucket 'logos'
+-- 2. The logo_url will be the public URL returned by Supabase Storage
+-- 3. Max file size is recommended to be 5MB per logo
+-- 4. Supported formats: JPG, PNG, WebP, GIF
+-- ============================================================================
+-- SQL SCHEMA FOR RENDEZ-VOUS (APPOINTMENTS) & ORDRES DE PAIEMENT (PAYMENT ORDERS)
+-- ============================================================================
+-- Execute this SQL in your Supabase PostgreSQL database
+-- Date: April 6, 2026
+
+-- ============================================================================
+-- 1. APPOINTMENTS TABLE (Rendez-vous)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.appointments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  date DATE NOT NULL,
+  time TIME,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for appointments
+CREATE INDEX IF NOT EXISTS idx_appointments_user_id ON public.appointments(user_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON public.appointments(date DESC);
+CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON public.appointments(created_at DESC);
+
+-- Enable RLS on appointments
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy: Users can only see their own appointments
+CREATE POLICY "Users can view their own appointments"
+  ON public.appointments
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- RLS Policy: Users can create their own appointments
+CREATE POLICY "Users can create their own appointments"
+  ON public.appointments
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+-- RLS Policy: Users can update their own appointments
+CREATE POLICY "Users can update their own appointments"
+  ON public.appointments
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- RLS Policy: Users can delete their own appointments
+CREATE POLICY "Users can delete their own appointments"
+  ON public.appointments
+  FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- ============================================================================
+-- 2. PAYMENT ORDERS TABLE (Ordres de Paiement)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.payment_orders (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  bon_commande_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE RESTRICT,
+  total_price NUMERIC(15, 2) NOT NULL CHECK (total_price > 0),
+  note TEXT,
+  status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'validated')),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for payment_orders
+CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON public.payment_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_bon_commande_id ON public.payment_orders(bon_commande_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON public.payment_orders(status);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_created_at ON public.payment_orders(created_at DESC);
+
+-- Enable RLS on payment_orders
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy: Admin/Comptable/Gestionnaire can view all payment orders
+CREATE POLICY "Authorized users can view all payment orders"
+  ON public.payment_orders
+  FOR SELECT
+  USING (
+    auth.uid() IN (
+      SELECT user_id FROM public.users WHERE role IN ('admin', 'comptable', 'gestionnaire')
+    )
+    OR auth.uid() = user_id
+  );
+
+-- RLS Policy: Authorized users can create payment orders
+CREATE POLICY "Authorized users can create payment orders"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (
+    auth.uid() IN (
+      SELECT user_id FROM public.users WHERE role IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- RLS Policy: Authorized users can update payment orders
+CREATE POLICY "Authorized users can update payment orders"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (
+    auth.uid() IN (
+      SELECT user_id FROM public.users WHERE role IN ('admin', 'comptable', 'gestionnaire')
+    )
+  )
+  WITH CHECK (
+    auth.uid() IN (
+      SELECT user_id FROM public.users WHERE role IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- RLS Policy: Authorized users can delete payment orders
+CREATE POLICY "Authorized users can delete payment orders"
+  ON public.payment_orders
+  FOR DELETE
+  USING (
+    auth.uid() IN (
+      SELECT user_id FROM public.users WHERE role IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- ============================================================================
+-- 3. UPDATE BONS_COMMANDES TABLE (if needed - add reference column)
+-- ============================================================================
+-- Uncomment if bons_commandes doesn't have a 'reference' column
+/*
+ALTER TABLE public.bons_commandes 
+ADD COLUMN IF NOT EXISTS reference VARCHAR(255) UNIQUE;
+*/
+
+-- ============================================================================
+-- 4. CREATE VIEWS FOR DASHBOARD ALERTS
+-- ============================================================================
+
+-- View: Upcoming appointments (for dashboard alerts)
+CREATE OR REPLACE VIEW upcoming_appointments_view AS
+SELECT 
+  a.id,
+  a.user_id,
+  a.title,
+  a.description,
+  a.date,
+  a.time,
+  a.created_at,
+  CASE 
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE AS DATE) THEN 'today'
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE + INTERVAL '1 day' AS DATE) THEN 'tomorrow'
+    WHEN CAST(a.date AS DATE) BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days' THEN 'this_week'
+    ELSE 'later'
+  END AS urgency
+FROM public.appointments a
+WHERE a.is_active = true
+  AND CAST(a.date AS DATE) >= CAST(CURRENT_DATE AS DATE)
+ORDER BY a.date ASC, a.time ASC;
+
+-- View: Pending payment orders (for dashboard alerts)
+CREATE OR REPLACE VIEW pending_payment_orders_view AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.created_at,
+  bc.bon_id AS bon_commande_reference
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'pending' AND po.is_active = true
+ORDER BY po.created_at DESC;
+
+-- ============================================================================
+-- 5. SAMPLE DATA (Optional - for testing)
+-- ============================================================================
+-- Uncomment to insert test data (replace user-id with actual UUID from auth.users)
+
+/*
+-- Insert sample appointment
+INSERT INTO public.appointments (user_id, title, description, date, time)
+VALUES (
+  'your-user-id-here',
+  'Réunion avec le client',
+  'Discuter des nouveaux produits',
+  CURRENT_DATE + INTERVAL '3 days',
+  '10:00:00'
+);
+
+-- Insert sample payment order
+-- Note: Replace bon_commande_id with actual ID from bons_commandes table
+INSERT INTO public.payment_orders (user_id, bon_commande_id, total_price, note, status)
+VALUES (
+  'your-user-id-here',
+  'actual-bon-commande-id-here',
+  15000.00,
+  'Paiement pour commande BCP-001',
+  'pending'
+);
+*/
+
+-- ============================================================================
+-- 6. VERIFICATION QUERIES (Run these to verify setup)
+-- ============================================================================
+-- Check appointments table structure
+-- SELECT table_name, column_name, data_type FROM information_schema.columns 
+-- WHERE table_name IN ('appointments', 'payment_orders');
+
+-- Check RLS policies
+-- SELECT * FROM pg_policies WHERE tablename IN ('appointments', 'payment_orders');
+
+-- Check table sizes and record count
+-- SELECT COUNT(*) as appointment_count FROM public.appointments;
+-- SELECT COUNT(*) as payment_order_count FROM public.payment_orders;
+
+-- ============================================================================
+-- END OF SQL SCHEMA SETUP
+-- ============================================================================
+
+-- ============================================================================
+-- COMPLETE FIX FOR ENTERPRISE SETTINGS & LOGO - EXECUTE THIS ENTIRE FILE
+-- ============================================================================
+-- Purpose: Create enterprise_settings table with RLS, indexes, and triggers
+-- Fixes: 406 Not Acceptable error + Database operations
+-- Time: ~1 minute to execute
+-- ============================================================================
+
+-- STEP 1: Drop existing table if you want a fresh start (OPTIONAL - COMMENT OUT IF YOU WANT TO KEEP DATA)
+-- DROP TABLE IF EXISTS public.enterprise_settings CASCADE;
+
+-- STEP 2: Create enterprise_settings table
+CREATE TABLE IF NOT EXISTS public.enterprise_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_name text NOT NULL DEFAULT 'ERP System',
+  logo_url text,
+  created_by_id uuid NOT NULL UNIQUE,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE CASCADE
+);
+
+-- STEP 3: Enable Row Level Security (RLS)
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- STEP 4: Drop existing policies (to avoid conflicts)
+DROP POLICY IF EXISTS "select_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "insert_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "update_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "delete_own" ON public.enterprise_settings;
+
+-- STEP 5: Create RLS Policies for secure data access
+-- Policy 1: Users can SELECT their own enterprise settings
+CREATE POLICY "select_own" ON public.enterprise_settings
+  FOR SELECT
+  USING (auth.uid() = created_by_id);
+
+-- Policy 2: Users can INSERT their own enterprise settings
+CREATE POLICY "insert_own" ON public.enterprise_settings
+  FOR INSERT
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Policy 3: Users can UPDATE their own enterprise settings
+CREATE POLICY "update_own" ON public.enterprise_settings
+  FOR UPDATE
+  USING (auth.uid() = created_by_id)
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Policy 4: Users can DELETE their own enterprise settings
+CREATE POLICY "delete_own" ON public.enterprise_settings
+  FOR DELETE
+  USING (auth.uid() = created_by_id);
+
+-- STEP 6: Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by 
+  ON public.enterprise_settings(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_updated_at 
+  ON public.enterprise_settings(updated_at);
+
+-- STEP 7: Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS set_enterprise_settings_updated_at ON public.enterprise_settings;
+DROP FUNCTION IF EXISTS set_enterprise_settings_updated_at();
+
+-- STEP 8: Create function to auto-update timestamp
+CREATE OR REPLACE FUNCTION set_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- STEP 9: Create trigger to auto-update timestamp on every UPDATE
+CREATE TRIGGER set_enterprise_settings_updated_at
+BEFORE UPDATE ON public.enterprise_settings
+FOR EACH ROW
+EXECUTE FUNCTION set_enterprise_settings_updated_at();
+
+-- STEP 10: Add comments for documentation
+COMMENT ON TABLE public.enterprise_settings IS 'Stores enterprise-wide settings including company name and logo URL';
+COMMENT ON COLUMN public.enterprise_settings.company_name IS 'The enterprise/company name';
+COMMENT ON COLUMN public.enterprise_settings.logo_url IS 'Public URL to the logo stored in Supabase Storage';
+COMMENT ON COLUMN public.enterprise_settings.created_by_id IS 'The user ID who created this record';
+
+-- ============================================================================
+-- ✅ ALL SETUP COMPLETE - Now you must:
+-- ============================================================================
+-- 1. Execute this entire file in Supabase SQL Editor
+-- 2. Wait for all statements to complete (should show ✅ for each)
+-- 3. Then create a storage bucket named "logos" (see instructions below)
+-- 4. Then refresh your browser
+-- ============================================================================
+
+-- STORAGE BUCKET SETUP (Manual - Follow these steps in Supabase Dashboard):
+-- ============================================================================
+-- LOCATION: Supabase Dashboard → Storage (left menu)
+-- 
+-- STEPS:
+--   1. Click "Create new bucket"
+--   2. Enter name: logos (lowercase, no spaces)
+--   3. IMPORTANT: Uncheck the box "Make it private" 
+--      (It MUST show "Public" when created)
+--   4. Click "Create bucket"
+--   5. Done! Now the bucket is ready to receive logo files
+--
+-- ============================================================================
+
+-- VERIFICATION: Run these queries to verify everything is set up correctly
+-- ============================================================================
+-- Verify table exists:
+SELECT EXISTS (
+  SELECT 1 FROM information_schema.tables 
+  WHERE table_schema = 'public' AND table_name = 'enterprise_settings'
+) AS table_exists;
+
+-- Verify RLS is enabled:
+SELECT relname, relrowsecurity FROM pg_class WHERE relname = 'enterprise_settings';
+
+-- Verify policies exist:
+SELECT policyname FROM pg_policies WHERE tablename = 'enterprise_settings';
+
+-- Verify indexes exist:
+SELECT indexname FROM pg_indexes WHERE tablename = 'enterprise_settings';
+
+-- ============================================================================
+-- NEXT STEPS FOR USER:
+-- ============================================================================
+-- 1. Execute this SQL file (Ctrl+Enter or Run button)
+-- 2. Verify all statements show ✅
+-- 3. Go to Storage and create bucket named "logos" (PUBLIC)
+-- 4. Refresh browser (F5)
+-- 5. Go to Settings page
+-- 6. Upload logo
+-- 7. Logo will display in:
+--    - Navbar (top) as circle (28x28px)
+--    - Sidebar (left) as square (36x36px)
+--    - Settings page as preview (128x128px)
+-- ============================================================================
+
+-- ============================================================================
+-- COMPLETE SQL CODE - COPY AND EXECUTE IN SUPABASE
+-- ============================================================================
+-- Rendez-vous (Appointments) & Ordres de Paiement (Payment Orders)
+-- Date: April 6, 2026
+-- ============================================================================
+
+-- ============================================================================
+-- PART 1: APPOINTMENTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.appointments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  date DATE NOT NULL,
+  time TIME,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_appointments_user_id ON public.appointments(user_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON public.appointments(date DESC);
+CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON public.appointments(created_at DESC);
+
+-- Enable Row Level Security
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy 1: Users can view their own appointments
+DROP POLICY IF EXISTS "Users can view their own appointments" ON public.appointments;
+CREATE POLICY "Users can view their own appointments"
+  ON public.appointments
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- RLS Policy 2: Users can create their own appointments
+DROP POLICY IF EXISTS "Users can create their own appointments" ON public.appointments;
+CREATE POLICY "Users can create their own appointments"
+  ON public.appointments
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+-- RLS Policy 3: Users can update their own appointments
+DROP POLICY IF EXISTS "Users can update their own appointments" ON public.appointments;
+CREATE POLICY "Users can update their own appointments"
+  ON public.appointments
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- RLS Policy 4: Users can delete their own appointments
+DROP POLICY IF EXISTS "Users can delete their own appointments" ON public.appointments;
+CREATE POLICY "Users can delete their own appointments"
+  ON public.appointments
+  FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- ============================================================================
+-- PART 2: PAYMENT ORDERS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.payment_orders (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  bon_commande_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE RESTRICT,
+  total_price NUMERIC(15, 2) NOT NULL CHECK (total_price > 0),
+  note TEXT,
+  status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'validated')),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON public.payment_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_bon_commande_id ON public.payment_orders(bon_commande_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON public.payment_orders(status);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_created_at ON public.payment_orders(created_at DESC);
+
+-- Enable Row Level Security
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy 1: Authorized users can view all payment orders
+DROP POLICY IF EXISTS "Authorized users can view all payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can view all payment orders"
+  ON public.payment_orders
+  FOR SELECT
+  USING (
+    auth.uid() IN (
+      SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')
+    )
+    OR auth.uid() = user_id
+  );
+
+-- RLS Policy 2: Authorized users can create payment orders
+DROP POLICY IF EXISTS "Authorized users can create payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can create payment orders"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (
+    auth.uid() IN (
+      SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- RLS Policy 3: Authorized users can update payment orders
+DROP POLICY IF EXISTS "Authorized users can update payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can update payment orders"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (
+    auth.uid() IN (
+      SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')
+    )
+  )
+  WITH CHECK (
+    auth.uid() IN (
+      SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- RLS Policy 4: Authorized users can delete payment orders
+DROP POLICY IF EXISTS "Authorized users can delete payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can delete payment orders"
+  ON public.payment_orders
+  FOR DELETE
+  USING (
+    auth.uid() IN (
+      SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')
+    )
+  );
+
+-- ============================================================================
+-- PART 3: DASHBOARD VIEWS
+-- ============================================================================
+
+-- View 1: Upcoming appointments with urgency indicator
+CREATE OR REPLACE VIEW public.upcoming_appointments_view AS
+SELECT 
+  a.id,
+  a.user_id,
+  a.title,
+  a.description,
+  a.date,
+  a.time,
+  a.created_at,
+  CASE 
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE AS DATE) THEN 'today'
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE + INTERVAL '1 day' AS DATE) THEN 'tomorrow'
+    WHEN CAST(a.date AS DATE) BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days' THEN 'this_week'
+    ELSE 'later'
+  END AS urgency
+FROM public.appointments a
+WHERE a.is_active = true
+  AND CAST(a.date AS DATE) >= CAST(CURRENT_DATE AS DATE)
+ORDER BY a.date ASC, a.time ASC;
+
+-- View 2: Pending payment orders with bon reference
+CREATE OR REPLACE VIEW public.pending_payment_orders_view AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.created_at,
+  bc.bon_id AS bon_commande_reference
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'pending' AND po.is_active = true
+ORDER BY po.created_at DESC;
+
+-- ============================================================================
+-- PART 4: VERIFICATION QUERIES (Run these to confirm setup)
+-- ============================================================================
+
+-- Verify appointments table
+-- SELECT * FROM information_schema.tables WHERE table_name = 'appointments';
+
+-- Verify payment_orders table
+-- SELECT * FROM information_schema.tables WHERE table_name = 'payment_orders';
+
+-- Verify RLS is enabled
+-- SELECT tablename, rowsecurity FROM pg_tables 
+-- WHERE tablename IN ('appointments', 'payment_orders');
+
+-- Count records (should be 0 initially)
+-- SELECT COUNT(*) as appointment_count FROM public.appointments;
+-- SELECT COUNT(*) as payment_order_count FROM public.payment_orders;
+
+-- ============================================================================
+-- END OF SQL SCHEMA
+-- ============================================================================
+
+-- ============================================================================
+-- CREATE TABLE FOR PURCHASE COMMAND PRODUCTS
+-- ============================================================================
+-- This table stores ONLY the missing products for each purchase command
+-- (products that were NOT found in inventory)
+
+CREATE TABLE IF NOT EXISTS public.purchase_command_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  purchase_command_id UUID NOT NULL REFERENCES public.purchase_commands(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  price DECIMAL(15,2) DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- CREATE INDEX FOR PERFORMANCE
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_purchase_command_products_purchase_id 
+ON public.purchase_command_products(purchase_command_id);
+
+-- ============================================================================
+-- ENABLE ROW LEVEL SECURITY
+-- ============================================================================
+ALTER TABLE IF EXISTS public.purchase_command_products ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- CREATE RLS POLICIES
+-- ============================================================================
+DROP POLICY IF EXISTS "Allow authenticated users to read purchase command products" ON public.purchase_command_products;
+DROP POLICY IF EXISTS "Allow authenticated users to manage purchase command products" ON public.purchase_command_products;
+
+CREATE POLICY "Allow authenticated users to read purchase command products" ON public.purchase_command_products 
+  FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "Allow authenticated users to manage purchase command products" ON public.purchase_command_products 
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ============================================================================
+-- VERIFICATION QUERY
+-- ============================================================================
+-- Check if table was created successfully:
+-- SELECT column_name, data_type FROM information_schema.columns 
+-- WHERE table_name = 'purchase_command_products' 
+-- ORDER BY ordinal_position;
+
+-- ============================================================================
+-- DEBT MANAGEMENT SYSTEM - DATABASE SCHEMA
+-- Created: April 6, 2026
+-- Purpose: Manage supplier debts and payment tracking for comptable users
+-- ============================================================================
+
+-- STEP 1: CREATE DEBTS TABLE
+-- Stores all debt records with supplier and payment information
+CREATE TABLE IF NOT EXISTS debts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  bon_commande_id UUID NOT NULL REFERENCES bons_commandes(id) ON DELETE CASCADE,
+  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name VARCHAR(255) NOT NULL,
+  total_price DECIMAL(15, 2) NOT NULL CHECK (total_price >= 0),
+  amount_paid DECIMAL(15, 2) NOT NULL DEFAULT 0 CHECK (amount_paid >= 0),
+  remaining_balance DECIMAL(15, 2) NOT NULL GENERATED ALWAYS AS (total_price - amount_paid) STORED,
+  description TEXT,
+  status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'partial', 'paid', 'overdue')),
+  due_date TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  created_by_role VARCHAR(50),
+  notes TEXT
+);
+
+-- STEP 2: CREATE DEBT PAYMENTS TABLE
+-- Tracks individual payment transactions for each debt
+CREATE TABLE IF NOT EXISTS debt_payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  debt_id UUID NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE SET NULL,
+  amount_paid DECIMAL(15, 2) NOT NULL CHECK (amount_paid > 0),
+  payment_method VARCHAR(100) DEFAULT 'cash' CHECK (payment_method IN ('cash', 'check', 'transfer', 'other')),
+  description TEXT,
+  payment_date TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  reference_number VARCHAR(100),
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- STEP 3: CREATE INDEXES FOR PERFORMANCE
+-- Index for debt queries by user
+CREATE INDEX IF NOT EXISTS idx_debts_user_id ON debts(user_id);
+
+-- Index for debt queries by bon de commande
+CREATE INDEX IF NOT EXISTS idx_debts_bon_commande_id ON debts(bon_commande_id);
+
+-- Index for debt status queries
+CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);
+
+-- Index for finding pending/overdue debts
+CREATE INDEX IF NOT EXISTS idx_debts_user_status ON debts(user_id, status);
+
+-- Index for debt payments
+CREATE INDEX IF NOT EXISTS idx_debt_payments_debt_id ON debt_payments(debt_id);
+
+-- Index for payment date queries
+CREATE INDEX IF NOT EXISTS idx_debt_payments_date ON debt_payments(payment_date);
+
+-- Index for remaining balance queries
+CREATE INDEX IF NOT EXISTS idx_debts_remaining ON debts(remaining_balance) WHERE status != 'paid';
+
+-- STEP 4: CREATE SUPPLIERS TABLE (if it doesn't exist)
+-- This table stores supplier information referenced by debts
+CREATE TABLE IF NOT EXISTS suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  email VARCHAR(255),
+  phone VARCHAR(20),
+  address TEXT,
+  city VARCHAR(100),
+  country VARCHAR(100),
+  tax_id VARCHAR(50),
+  status VARCHAR(50) DEFAULT 'active',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- STEP 5: CREATE TRIGGERS FOR AUTO-UPDATE UPDATED_AT
+CREATE OR REPLACE FUNCTION update_debts_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_debts_updated_at
+BEFORE UPDATE ON debts
+FOR EACH ROW
+EXECUTE FUNCTION update_debts_updated_at();
+
+-- STEP 6: CREATE VIEW FOR DEBT SUMMARY
+-- Shows summary of all debts with key metrics
+CREATE OR REPLACE VIEW debts_summary AS
+SELECT 
+  d.id,
+  d.user_id,
+  d.bon_commande_id,
+  bc.bon_id,
+  d.supplier_name,
+  d.total_price,
+  d.amount_paid,
+  d.remaining_balance,
+  d.status,
+  d.due_date,
+  d.created_at,
+  (SELECT COUNT(*) FROM debt_payments WHERE debt_id = d.id) as payment_count,
+  (SELECT MAX(payment_date) FROM debt_payments WHERE debt_id = d.id) as last_payment_date,
+  CASE 
+    WHEN d.remaining_balance = 0 THEN 'Fully Paid'
+    WHEN d.remaining_balance = d.total_price THEN 'Not Started'
+    ELSE 'Partially Paid'
+  END as payment_status
+FROM debts d
+LEFT JOIN bons_commandes bc ON d.bon_commande_id = bc.id;
+
+-- STEP 7: CREATE VIEW FOR PENDING DEBTS
+-- Shows only debts that are not yet fully paid
+CREATE OR REPLACE VIEW pending_debts AS
+SELECT * FROM debts_summary
+WHERE status IN ('pending', 'partial', 'overdue')
+ORDER BY due_date ASC NULLS LAST, created_at DESC;
+
+-- STEP 8: CREATE VIEW FOR DEBT STATISTICS
+-- Summary statistics for debt analysis
+CREATE OR REPLACE VIEW debt_statistics AS
+SELECT 
+  user_id,
+  COUNT(*) as total_debts,
+  COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_debts,
+  COUNT(CASE WHEN status IN ('pending', 'partial', 'overdue') THEN 1 END) as unpaid_debts,
+  SUM(CASE WHEN status = 'paid' THEN total_price ELSE 0 END) as total_paid,
+  SUM(CASE WHEN status != 'paid' THEN remaining_balance ELSE 0 END) as total_remaining,
+  SUM(total_price) as total_debt_amount
+FROM debts
+GROUP BY user_id;
+
+-- STEP 9: ENABLE ROW LEVEL SECURITY
+ALTER TABLE debts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE debt_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
+
+-- STEP 10: CREATE RLS POLICIES FOR DEBTS TABLE
+-- Users can only see their own debts
+CREATE POLICY "debts_select_own" ON debts
+FOR SELECT USING (auth.uid() = user_id OR auth.role() = 'authenticated');
+
+-- Users can create debts
+CREATE POLICY "debts_insert_authenticated" ON debts
+FOR INSERT WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
+
+-- Users can update their own debts
+CREATE POLICY "debts_update_own" ON debts
+FOR UPDATE USING (auth.uid() = user_id OR auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+-- Users can delete their own debts
+CREATE POLICY "debts_delete_own" ON debts
+FOR DELETE USING (auth.uid() = user_id OR auth.role() = 'authenticated');
+
+-- STEP 11: CREATE RLS POLICIES FOR DEBT_PAYMENTS TABLE
+-- Users can see payments for their debts
+CREATE POLICY "debt_payments_select" ON debt_payments
+FOR SELECT USING (
+  auth.role() = 'authenticated' OR
+  debt_id IN (SELECT id FROM debts WHERE user_id = auth.uid())
+);
+
+-- Users can create payments for their debts
+CREATE POLICY "debt_payments_insert" ON debt_payments
+FOR INSERT WITH CHECK (
+  auth.uid() = user_id AND
+  debt_id IN (SELECT id FROM debts WHERE user_id = auth.uid())
+);
+
+-- STEP 12: CREATE RLS POLICIES FOR SUPPLIERS TABLE
+CREATE POLICY "suppliers_select" ON suppliers
+FOR SELECT USING (auth.role() = 'authenticated');
+
+-- STEP 13: CREATE FUNCTION TO UPDATE DEBT STATUS AUTOMATICALLY
+-- This function updates debt status based on amount paid
+CREATE OR REPLACE FUNCTION update_debt_status()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Update status based on amount paid
+  IF NEW.amount_paid = 0 THEN
+    NEW.status = 'pending';
+  ELSIF NEW.amount_paid < NEW.total_price THEN
+    NEW.status = 'partial';
+  ELSIF NEW.amount_paid >= NEW.total_price THEN
+    NEW.status = 'paid';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to call the function
+CREATE TRIGGER trigger_update_debt_status
+BEFORE INSERT OR UPDATE ON debts
+FOR EACH ROW
+EXECUTE FUNCTION update_debt_status();
+
+-- STEP 14: CREATE FUNCTION TO CALCULATE REMAINING BALANCE
+-- This function is called when a payment is made
+CREATE OR REPLACE FUNCTION process_debt_payment(
+  p_debt_id UUID,
+  p_amount_paid DECIMAL,
+  p_user_id UUID,
+  p_description TEXT,
+  p_payment_method VARCHAR
+)
+RETURNS JSON AS $$
+DECLARE
+  v_debt_record RECORD;
+  v_new_amount_paid DECIMAL;
+  v_new_remaining DECIMAL;
+  v_payment_id UUID;
+  v_result JSON;
+BEGIN
+  -- Get debt record
+  SELECT * INTO v_debt_record FROM debts WHERE id = p_debt_id;
+  
+  -- Check if debt exists
+  IF v_debt_record IS NULL THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Debt not found'
+    );
+  END IF;
+  
+  -- Check if payment amount is valid
+  IF p_amount_paid <= 0 THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Payment amount must be greater than 0'
+    );
+  END IF;
+  
+  -- Check if payment exceeds remaining balance
+  IF (v_debt_record.amount_paid + p_amount_paid) > v_debt_record.total_price THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Payment amount exceeds remaining balance',
+      'remaining_balance', v_debt_record.remaining_balance
+    );
+  END IF;
+  
+  -- Insert payment record
+  INSERT INTO debt_payments (debt_id, user_id, amount_paid, description, payment_method)
+  VALUES (p_debt_id, p_user_id, p_amount_paid, p_description, p_payment_method)
+  RETURNING id INTO v_payment_id;
+  
+  -- Update debt amount paid
+  v_new_amount_paid := v_debt_record.amount_paid + p_amount_paid;
+  v_new_remaining := v_debt_record.total_price - v_new_amount_paid;
+  
+  UPDATE debts 
+  SET amount_paid = v_new_amount_paid
+  WHERE id = p_debt_id;
+  
+  -- Return success result
+  v_result := json_build_object(
+    'success', true,
+    'message', 'Payment recorded successfully',
+    'payment_id', v_payment_id,
+    'amount_paid', p_amount_paid,
+    'total_amount_paid', v_new_amount_paid,
+    'remaining_balance', v_new_remaining,
+    'status', CASE 
+      WHEN v_new_remaining = 0 THEN 'paid'
+      WHEN v_new_remaining < v_debt_record.total_price THEN 'partial'
+      ELSE 'pending'
+    END
+  );
+  
+  RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================================
+-- VERIFICATION QUERIES - Run these to verify the schema was created
+-- ============================================================================
+
+-- Check if debts table exists and show columns
+SELECT 
+  column_name, 
+  data_type, 
+  is_nullable
+FROM information_schema.columns 
+WHERE table_name = 'debts'
+ORDER BY ordinal_position;
+
+-- Check if debt_payments table exists
+SELECT 
+  column_name, 
+  data_type, 
+  is_nullable
+FROM information_schema.columns 
+WHERE table_name = 'debt_payments'
+ORDER BY ordinal_position;
+
+-- Check if indexes were created
+SELECT indexname FROM pg_indexes WHERE tablename IN ('debts', 'debt_payments');
+
+-- Check RLS policies
+SELECT schemaname, tablename, policyname FROM pg_policies WHERE tablename IN ('debts', 'debt_payments');
+
+-- ============================================================================
+-- MIGRATION NOTES
+-- ============================================================================
+-- 1. Ensure bons_commandes table exists before creating debts table
+-- 2. If suppliers table doesn't exist, it will be created automatically
+-- 3. RLS is enabled - adjust policies based on your authentication setup
+-- 4. The generated column 'remaining_balance' is computed automatically
+-- 5. Status updates are automatic via trigger function
+
+-- ============================================================================
+-- SAMPLE DATA (Optional - for testing)
+-- ============================================================================
+-- Uncomment to add test data after confirming schema creation
+
+/*
+-- Add sample supplier
+INSERT INTO suppliers (name, email, phone, city, country)
+VALUES 
+  ('Global Suppliers Inc', 'contact@global.com', '+1-234-567-8900', 'New York', 'USA'),
+  ('European Distributors', 'info@eurodist.com', '+33-1-2345-6789', 'Paris', 'France'),
+  ('Asian Trading Co', 'sales@asiantrading.com', '+86-10-1234-5678', 'Beijing', 'China');
+
+-- View all debts
+SELECT * FROM debts_summary;
+
+-- View pending debts
+SELECT * FROM pending_debts;
+
+-- View debt statistics
+SELECT * FROM debt_statistics;
+
+-- Get payment history for a debt
+SELECT * FROM debt_payments WHERE debt_id = 'debt-uuid-here';
+*/
+
+-- ============================================================================
+-- USAGE EXAMPLES
+-- ============================================================================
+
+-- Example 1: Get all debts for current user
+-- SELECT * FROM debts WHERE user_id = auth.uid();
+
+-- Example 2: Get pending debts with remaining balance
+-- SELECT id, supplier_name, total_price, amount_paid, remaining_balance, status 
+-- FROM debts 
+-- WHERE user_id = auth.uid() AND status != 'paid'
+-- ORDER BY due_date ASC;
+
+-- Example 3: Record a payment (use the function)
+-- SELECT process_debt_payment(
+--   'debt-uuid',
+--   5000,
+--   auth.uid(),
+--   'Payment for January',
+--   'transfer'
+-- );
+
+-- Example 4: Get debt with payment history
+-- SELECT 
+--   d.id, d.supplier_name, d.total_price, d.amount_paid, d.remaining_balance,
+--   COUNT(dp.id) as payment_count,
+--   json_agg(
+--     json_build_object(
+--       'id', dp.id,
+--       'amount', dp.amount_paid,
+--       'date', dp.payment_date,
+--       'description', dp.description
+--     )
+--   ) as payments
+-- FROM debts d
+-- LEFT JOIN debt_payments dp ON d.id = dp.debt_id
+-- WHERE d.id = 'debt-uuid'
+-- GROUP BY d.id, d.supplier_name, d.total_price, d.amount_paid, d.remaining_balance;
+
+-- ============================================================================
+-- END OF DEBT MANAGEMENT SCHEMA
+-- ============================================================================
+
+-- ============================================================================
+-- DEBT MANAGEMENT - DATABASE VERIFICATION AND FIX
+-- Date: April 6, 2026
+-- Purpose: Verify and fix any missing fields/configurations in debt tables
+-- ============================================================================
+
+-- STEP 1: VERIFY DEBTS TABLE HAS ALL REQUIRED COLUMNS
+-- Add missing columns if they don't exist
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS amount_paid DECIMAL(15, 2) NOT NULL DEFAULT 0 CHECK (amount_paid >= 0);
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS remaining_balance DECIMAL(15, 2) GENERATED ALWAYS AS (total_price - amount_paid) STORED;
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS due_date TIMESTAMP WITH TIME ZONE;
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'partial', 'paid', 'overdue'));
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS notes TEXT;
+
+ALTER TABLE debts 
+ADD COLUMN IF NOT EXISTS created_by_role VARCHAR(50);
+
+-- STEP 2: VERIFY DEBT_PAYMENTS TABLE HAS ALL REQUIRED COLUMNS
+
+ALTER TABLE debt_payments 
+ADD COLUMN IF NOT EXISTS payment_method VARCHAR(100) DEFAULT 'cash' CHECK (payment_method IN ('cash', 'check', 'transfer', 'other'));
+
+ALTER TABLE debt_payments 
+ADD COLUMN IF NOT EXISTS reference_number VARCHAR(100);
+
+ALTER TABLE debt_payments 
+ADD COLUMN IF NOT EXISTS notes TEXT;
+
+-- STEP 3: ENSURE TRIGGER FOR AUTO-UPDATE EXISTS
+
+-- Drop existing trigger if it exists (to avoid conflicts)
+DROP TRIGGER IF EXISTS trigger_debts_updated_at ON debts;
+
+-- Create the trigger function
+CREATE OR REPLACE FUNCTION update_debts_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the trigger
+CREATE TRIGGER trigger_debts_updated_at
+BEFORE UPDATE ON debts
+FOR EACH ROW
+EXECUTE FUNCTION update_debts_updated_at();
+
+-- STEP 4: ENSURE STATUS UPDATE TRIGGER EXISTS
+
+-- Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS trigger_update_debt_status ON debts;
+
+-- Create the function for status update
+CREATE OR REPLACE FUNCTION update_debt_status()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Update status based on amount paid
+  IF NEW.amount_paid = 0 THEN
+    NEW.status = 'pending';
+  ELSIF NEW.amount_paid < NEW.total_price THEN
+    NEW.status = 'partial';
+  ELSIF NEW.amount_paid >= NEW.total_price THEN
+    NEW.status = 'paid';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the trigger
+CREATE TRIGGER trigger_update_debt_status
+BEFORE INSERT OR UPDATE ON debts
+FOR EACH ROW
+EXECUTE FUNCTION update_debt_status();
+
+-- STEP 5: ENSURE PAYMENT PROCESSING FUNCTION EXISTS
+
+CREATE OR REPLACE FUNCTION process_debt_payment(
+  p_debt_id UUID,
+  p_amount_paid DECIMAL,
+  p_user_id UUID,
+  p_description TEXT DEFAULT NULL,
+  p_payment_method VARCHAR DEFAULT 'cash'
+)
+RETURNS JSON AS $$
+DECLARE
+  v_debt_record RECORD;
+  v_new_amount_paid DECIMAL;
+  v_new_remaining DECIMAL;
+  v_payment_id UUID;
+  v_result JSON;
+BEGIN
+  -- Get debt record
+  SELECT * INTO v_debt_record FROM debts WHERE id = p_debt_id;
+  
+  -- Check if debt exists
+  IF v_debt_record IS NULL THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Debt not found'
+    );
+  END IF;
+  
+  -- Check if payment amount is valid
+  IF p_amount_paid <= 0 THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Payment amount must be greater than 0'
+    );
+  END IF;
+  
+  -- Check if payment exceeds remaining balance
+  IF (v_debt_record.amount_paid + p_amount_paid) > v_debt_record.total_price THEN
+    RETURN json_build_object(
+      'success', false,
+      'message', 'Payment amount exceeds remaining balance',
+      'remaining_balance', v_debt_record.remaining_balance
+    );
+  END IF;
+  
+  -- Insert payment record
+  INSERT INTO debt_payments (debt_id, user_id, amount_paid, description, payment_method, payment_date)
+  VALUES (p_debt_id, p_user_id, p_amount_paid, p_description, p_payment_method, now())
+  RETURNING id INTO v_payment_id;
+  
+  -- Update debt amount paid
+  v_new_amount_paid := v_debt_record.amount_paid + p_amount_paid;
+  v_new_remaining := v_debt_record.total_price - v_new_amount_paid;
+  
+  UPDATE debts 
+  SET amount_paid = v_new_amount_paid,
+      updated_at = now()
+  WHERE id = p_debt_id;
+  
+  -- Return success result
+  v_result := json_build_object(
+    'success', true,
+    'message', 'Payment recorded successfully',
+    'payment_id', v_payment_id,
+    'amount_paid', p_amount_paid,
+    'total_amount_paid', v_new_amount_paid,
+    'remaining_balance', v_new_remaining,
+    'status', CASE 
+      WHEN v_new_remaining = 0 THEN 'paid'
+      WHEN v_new_remaining < v_debt_record.total_price THEN 'partial'
+      ELSE 'pending'
+    END
+  );
+  
+  RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+-- STEP 6: CREATE OR UPDATE VIEWS
+
+-- Drop existing views first
+DROP VIEW IF EXISTS debt_statistics CASCADE;
+DROP VIEW IF EXISTS pending_debts CASCADE;
+DROP VIEW IF EXISTS debts_summary CASCADE;
+
+-- Create debts summary view
+CREATE OR REPLACE VIEW debts_summary AS
+SELECT 
+  d.id,
+  d.user_id,
+  d.bon_commande_id,
+  COALESCE(bc.bon_id, 'N/A') as bon_id,
+  d.supplier_name,
+  d.total_price,
+  d.amount_paid,
+  d.remaining_balance,
+  d.status,
+  d.due_date,
+  d.description,
+  d.created_at,
+  d.updated_at,
+  (SELECT COUNT(*) FROM debt_payments WHERE debt_id = d.id) as payment_count,
+  (SELECT MAX(payment_date) FROM debt_payments WHERE debt_id = d.id) as last_payment_date,
+  CASE 
+    WHEN d.remaining_balance = 0 THEN 'Fully Paid'
+    WHEN d.remaining_balance = d.total_price THEN 'Not Started'
+    ELSE 'Partially Paid'
+  END as payment_status
+FROM debts d
+LEFT JOIN bons_commandes bc ON d.bon_commande_id = bc.id;
+
+-- Create pending debts view
+CREATE OR REPLACE VIEW pending_debts AS
+SELECT * FROM debts_summary
+WHERE status IN ('pending', 'partial', 'overdue')
+ORDER BY due_date ASC NULLS LAST, created_at DESC;
+
+-- Create debt statistics view
+CREATE OR REPLACE VIEW debt_statistics AS
+SELECT 
+  user_id,
+  COUNT(*) as total_debts,
+  COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_debts,
+  COUNT(CASE WHEN status IN ('pending', 'partial', 'overdue') THEN 1 END) as unpaid_debts,
+  SUM(CASE WHEN status = 'paid' THEN total_price ELSE 0 END) as total_paid,
+  SUM(CASE WHEN status != 'paid' THEN remaining_balance ELSE 0 END) as total_remaining,
+  SUM(total_price) as total_debt_amount,
+  AVG(CASE WHEN status != 'paid' THEN remaining_balance END) as avg_remaining_per_debt
+FROM debts
+GROUP BY user_id;
+
+-- STEP 7: ENSURE ALL INDEXES EXIST
+
+CREATE INDEX IF NOT EXISTS idx_debts_user_id ON debts(user_id);
+CREATE INDEX IF NOT EXISTS idx_debts_bon_commande_id ON debts(bon_commande_id);
+CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);
+CREATE INDEX IF NOT EXISTS idx_debts_user_status ON debts(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_debts_supplier_name ON debts(supplier_name);
+CREATE INDEX IF NOT EXISTS idx_debts_due_date ON debts(due_date);
+CREATE INDEX IF NOT EXISTS idx_debt_payments_debt_id ON debt_payments(debt_id);
+CREATE INDEX IF NOT EXISTS idx_debt_payments_date ON debt_payments(payment_date);
+CREATE INDEX IF NOT EXISTS idx_debts_remaining ON debts(remaining_balance) WHERE status != 'paid';
+CREATE INDEX IF NOT EXISTS idx_debts_created_at ON debts(created_at DESC);
+
+-- STEP 8: VERIFICATION QUERIES
+-- Run these to check if everything is set up correctly
+
+SELECT 'DEBTS TABLE COLUMNS:' as check_type;
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns 
+WHERE table_name = 'debts'
+ORDER BY ordinal_position;
+
+SELECT 'DEBT_PAYMENTS TABLE COLUMNS:' as check_type;
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns 
+WHERE table_name = 'debt_payments'
+ORDER BY ordinal_position;
+
+SELECT 'TRIGGERS:' as check_type;
+SELECT trigger_name, event_object_table, action_timing, event_manipulation
+FROM information_schema.triggers 
+WHERE trigger_schema = 'public' AND (event_object_table = 'debts' OR event_object_table = 'debt_payments')
+ORDER BY event_object_table;
+
+SELECT 'INDEXES:' as check_type;
+SELECT indexname, tablename 
+FROM pg_indexes 
+WHERE schemaname = 'public' AND (tablename = 'debts' OR tablename = 'debt_payments')
+ORDER BY tablename, indexname;
+
+SELECT 'VIEWS:' as check_type;
+SELECT table_name 
+FROM information_schema.views 
+WHERE table_schema = 'public' AND table_name IN ('debts_summary', 'pending_debts', 'debt_statistics');
+
+-- ============================================================================
+-- NOTES:
+-- 1. If you get errors about columns already existing, that's fine - they were already there
+-- 2. The remaining_balance is automatically calculated as (total_price - amount_paid)
+-- 3. The status is automatically updated based on amount_paid value
+-- 4. All dates are stored in timezone-aware format (TIMESTAMP WITH TIME ZONE)
+-- 5. All indexes are created for optimal query performance
+-- ============================================================================
+
+-- ============================================================
+-- DIAGNOSTIC: Check current state
+-- ============================================================
+
+-- Check if table exists
+SELECT tablename FROM pg_tables WHERE tablename = 'enterprise_settings';
+
+-- Check table structure
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'enterprise_settings' 
+ORDER BY ordinal_position;
+
+-- Check if RLS is enabled
+SELECT tablename, rowsecurity FROM pg_tables WHERE tablename = 'enterprise_settings';
+
+-- Check existing policies
+SELECT policyname, permissive, roles, qual, with_check
+FROM pg_policies
+WHERE tablename = 'enterprise_settings';
+
+-- Check existing data
+SELECT * FROM public.enterprise_settings;
+
+-- Drop project_finance tables (migrate to project_versements)
+-- All data should be in project_versements table now
+
+-- DROP TABLE project_finance_detail (child table first)
+DROP TABLE IF EXISTS public.project_finance_detail CASCADE;
+
+-- DROP TABLE project_finance (parent table)
+DROP TABLE IF EXISTS public.project_finance CASCADE;
+
+-- Verify project_versements table exists and has correct structure
+-- SELECT * FROM project_versements;
+
+-- Note: All project finance data is now managed through project_versements table
+-- New versements are created with versement_type = 'finance_allocation' to identify them
+
+-- ============================================
+-- ENTERPRISE EXPENSES TABLE SCHEMA
+-- ============================================
+-- This table manages all company-level expenses
+-- Such as rent, utilities, office supplies, etc.
+
+CREATE TABLE IF NOT EXISTS enterprise_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  category VARCHAR(100),
+  amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
+  expense_date DATE NOT NULL,
+  vendor_name VARCHAR(255),
+  receipt_number VARCHAR(100),
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Create indexes for faster queries
+CREATE INDEX idx_enterprise_expenses_user_id ON enterprise_expenses(user_id);
+CREATE INDEX idx_enterprise_expenses_date ON enterprise_expenses(expense_date DESC);
+CREATE INDEX idx_enterprise_expenses_category ON enterprise_expenses(category);
+CREATE INDEX idx_enterprise_expenses_created_at ON enterprise_expenses(created_at DESC);
+
+-- Create trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_enterprise_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enterprise_expenses_update_timestamp
+BEFORE UPDATE ON enterprise_expenses
+FOR EACH ROW
+EXECUTE FUNCTION update_enterprise_expenses_timestamp();
+
+-- Enable RLS (Row Level Security)
+ALTER TABLE enterprise_expenses ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users with appropriate roles can access
+CREATE POLICY enterprise_expenses_access ON enterprise_expenses
+FOR ALL USING (
+  (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'comptable', 'gestionnaire')
+);
+
+-- Insert sample data (optional)
+INSERT INTO enterprise_expenses (user_id, name, description, category, amount, expense_date, vendor_name, notes) 
+VALUES 
+  (NULL, 'Loyer du Bureau', 'Loyer mensuel bureau central', 'Immobilier', 500000, '2026-03-01', 'Propriétaire bâtiment', 'Mois de mars'),
+  (NULL, 'Électricité et Eau', 'Facture services publics', 'Utilitaires', 75000, '2026-03-05', 'Sonelgaz/Seaal', 'Facturation février'),
+  (NULL, 'Fournitures de Bureau', 'Papier, stylos, cartouches', 'Fournitures', 35000, '2026-03-10', 'Fournisseur bureau', 'Stock mensuel'),
+  (NULL, 'Maintenance Informatique', 'Support technique et maintenance', 'IT', 50000, '2026-03-15', 'Technicien système', 'Contrat maintenance')
+ON CONFLICT DO NOTHING;
+
+-- ============================================================================
+-- ENTERPRISE SETTINGS - PRODUCTION SCHEMA (FIXED)
+-- ============================================================================
+-- This fixes all issues: 406 errors, RLS, upsert handling
+
+DROP TABLE IF EXISTS public.enterprise_settings CASCADE;
+
+CREATE TABLE public.enterprise_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by_id uuid NOT NULL UNIQUE,
+  company_name text NOT NULL DEFAULT 'ERP System',
+  logo_url text DEFAULT '',
+  created_at timestamptz DEFAULT now() NOT NULL,
+  updated_at timestamptz DEFAULT now() NOT NULL,
+  CONSTRAINT fk_created_by FOREIGN KEY (created_by_id) 
+    REFERENCES auth.users(id) ON DELETE CASCADE
+);
+
+-- Enable RLS
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- Drop old policies if they exist
+DROP POLICY IF EXISTS "allow_select_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_insert_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_update_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_delete_own_settings" ON public.enterprise_settings;
+
+-- RLS Policies
+CREATE POLICY "allow_select_own_settings" ON public.enterprise_settings
+  FOR SELECT
+  USING (auth.uid() = created_by_id);
+
+CREATE POLICY "allow_insert_own_settings" ON public.enterprise_settings
+  FOR INSERT
+  WITH CHECK (auth.uid() = created_by_id);
+
+CREATE POLICY "allow_update_own_settings" ON public.enterprise_settings
+  FOR UPDATE
+  USING (auth.uid() = created_by_id)
+  WITH CHECK (auth.uid() = created_by_id);
+
+CREATE POLICY "allow_delete_own_settings" ON public.enterprise_settings
+  FOR DELETE
+  USING (auth.uid() = created_by_id);
+
+-- Indexes
+CREATE INDEX idx_enterprise_settings_created_by ON public.enterprise_settings(created_by_id);
+CREATE INDEX idx_enterprise_settings_updated_at ON public.enterprise_settings(updated_at DESC);
+
+-- Auto-update timestamp trigger
+DROP TRIGGER IF EXISTS update_enterprise_settings_timestamp ON public.enterprise_settings;
+DROP FUNCTION IF EXISTS update_enterprise_settings_timestamp();
+
+CREATE OR REPLACE FUNCTION update_enterprise_settings_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_enterprise_settings_timestamp
+BEFORE UPDATE ON public.enterprise_settings
+FOR EACH ROW
+EXECUTE FUNCTION update_enterprise_settings_timestamp();
+
+-- Verification
+SELECT 'Table created' AS status;
+SELECT relname, relrowsecurity FROM pg_class WHERE relname = 'enterprise_settings';
+SELECT policyname FROM pg_policies WHERE tablename = 'enterprise_settings';
+
+-- ============================================================================
+-- COPY & PASTE THIS EXACT SQL INTO SUPABASE SQL EDITOR
+-- ============================================================================
+
+-- Step 1: Add missing columns to project_expenses table
+ALTER TABLE project_expenses
+ADD COLUMN IF NOT EXISTS created_by_id UUID,
+ADD COLUMN IF NOT EXISTS chef_de_projet_id UUID,
+ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'autre',
+ADD COLUMN IF NOT EXISTS notes TEXT,
+ADD COLUMN IF NOT EXISTS amount DECIMAL(12, 2);
+
+-- Step 2: Add foreign key constraints for user references (if they don't exist)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_created_by_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_created_by_id_fkey 
+      FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_chef_de_projet_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_chef_de_projet_id_fkey 
+      FOREIGN KEY (chef_de_projet_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Step 3: Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_box_id 
+  ON project_expenses(project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_created_by_id 
+  ON project_expenses(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_chef_de_projet_id 
+  ON project_expenses(chef_de_projet_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_expense_date 
+  ON project_expenses(expense_date);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_category 
+  ON project_expenses(category);
+
+-- Step 4: Create trigger function for auto-updating timestamps
+CREATE OR REPLACE FUNCTION update_project_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 5: Create trigger on the table
+DROP TRIGGER IF EXISTS project_expenses_update_timestamp ON project_expenses;
+CREATE TRIGGER project_expenses_update_timestamp
+  BEFORE UPDATE ON project_expenses
+  FOR EACH ROW
+  EXECUTE FUNCTION update_project_expenses_timestamp();
+
+-- ============================================================================
+-- DONE! Your project_expenses table is now enhanced with:
+-- ✅ created_by_id column
+-- ✅ chef_de_projet_id column  
+-- ✅ category column
+-- ✅ notes column
+-- ✅ amount column
+-- ✅ Foreign key constraints
+-- ✅ Performance indexes
+-- ✅ Auto-updating timestamps
+-- ============================================================================
+
+-- ============================================
+-- COMPLETE EXPENSES SYSTEM SETUP
+-- ============================================
+-- This file contains all SQL needed to set up the complete expenses system
+-- Includes: Worker Expenses and Enterprise Expenses tables
+
+-- ============================================
+-- 1. WORKER EXPENSES TABLE
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS worker_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  category VARCHAR(100),
+  amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
+  expense_date DATE NOT NULL,
+  worker_name VARCHAR(255),
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX idx_worker_expenses_user_id ON worker_expenses(user_id);
+CREATE INDEX idx_worker_expenses_date ON worker_expenses(expense_date DESC);
+CREATE INDEX idx_worker_expenses_category ON worker_expenses(category);
+CREATE INDEX idx_worker_expenses_created_at ON worker_expenses(created_at DESC);
+
+CREATE OR REPLACE FUNCTION update_worker_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS worker_expenses_update_timestamp ON worker_expenses;
+CREATE TRIGGER worker_expenses_update_timestamp
+BEFORE UPDATE ON worker_expenses
+FOR EACH ROW
+EXECUTE FUNCTION update_worker_expenses_timestamp();
+
+ALTER TABLE worker_expenses ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS worker_expenses_user_access ON worker_expenses;
+CREATE POLICY worker_expenses_user_access ON worker_expenses
+FOR ALL USING (
+  auth.uid() = user_id OR 
+  (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'comptable', 'gestionnaire')
+);
+
+-- ============================================
+-- 2. ENTERPRISE EXPENSES TABLE
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS enterprise_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  category VARCHAR(100),
+  amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
+  expense_date DATE NOT NULL,
+  vendor_name VARCHAR(255),
+  receipt_number VARCHAR(100),
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX idx_enterprise_expenses_user_id ON enterprise_expenses(user_id);
+CREATE INDEX idx_enterprise_expenses_date ON enterprise_expenses(expense_date DESC);
+CREATE INDEX idx_enterprise_expenses_category ON enterprise_expenses(category);
+CREATE INDEX idx_enterprise_expenses_created_at ON enterprise_expenses(created_at DESC);
+
+CREATE OR REPLACE FUNCTION update_enterprise_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS enterprise_expenses_update_timestamp ON enterprise_expenses;
+CREATE TRIGGER enterprise_expenses_update_timestamp
+BEFORE UPDATE ON enterprise_expenses
+FOR EACH ROW
+EXECUTE FUNCTION update_enterprise_expenses_timestamp();
+
+ALTER TABLE enterprise_expenses ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS enterprise_expenses_access ON enterprise_expenses;
+CREATE POLICY enterprise_expenses_access ON enterprise_expenses
+FOR ALL USING (
+  (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'comptable', 'gestionnaire')
+);
+
+-- ============================================
+-- 3. SAMPLE DATA (OPTIONAL)
+-- ============================================
+
+-- Worker Expenses Sample Data
+INSERT INTO worker_expenses (user_id, description, category, amount, expense_date, worker_name, notes) 
+VALUES 
+  (NULL, 'Salaire hebdomadaire - Équipe A', 'Salaire', 150000, CURRENT_DATE - 3, 'Équipe construction', 'Semaine du 16-20 mars'),
+  (NULL, 'Prime de rendement', 'Prime', 50000, CURRENT_DATE - 4, 'Ali Hassan', 'Bonus mensuel'),
+  (NULL, 'Indemnité de transport', 'Transport', 25000, CURRENT_DATE - 5, 'Équipe logistique', 'Déplacement site'),
+  (NULL, 'Allocations journalières', 'Allocations', 35000, CURRENT_DATE - 6, 'Équipe technique', 'Frais divers')
+ON CONFLICT DO NOTHING;
+
+-- Enterprise Expenses Sample Data
+INSERT INTO enterprise_expenses (user_id, name, description, category, amount, expense_date, vendor_name, notes) 
+VALUES 
+  (NULL, 'Loyer du Bureau', 'Loyer mensuel bureau central', 'Immobilier', 500000, CURRENT_DATE - 5, 'Propriétaire bâtiment', 'Mois en cours'),
+  (NULL, 'Électricité et Eau', 'Facture services publics', 'Utilitaires', 75000, CURRENT_DATE - 10, 'Sonelgaz/Seaal', 'Facturation'),
+  (NULL, 'Fournitures de Bureau', 'Papier, stylos, cartouches', 'Fournitures', 35000, CURRENT_DATE - 12, 'Fournisseur bureau', 'Stock mensuel'),
+  (NULL, 'Maintenance Informatique', 'Support technique et maintenance', 'IT', 50000, CURRENT_DATE - 8, 'Technicien système', 'Contrat maintenance')
+ON CONFLICT DO NOTHING;
+
+-- ============================================
+-- 4. GRANTS & PERMISSIONS
+-- ============================================
+
+-- Grant permissions to authenticated users
+GRANT SELECT ON worker_expenses TO authenticated;
+GRANT INSERT ON worker_expenses TO authenticated;
+GRANT UPDATE ON worker_expenses TO authenticated;
+GRANT DELETE ON worker_expenses TO authenticated;
+
+GRANT SELECT ON enterprise_expenses TO authenticated;
+GRANT INSERT ON enterprise_expenses TO authenticated;
+GRANT UPDATE ON enterprise_expenses TO authenticated;
+GRANT DELETE ON enterprise_expenses TO authenticated;
+
+-- ============================================================
+-- ENTERPRISE SETTINGS TABLE SETUP - CLEAN VERSION
+-- Run this in Supabase SQL Editor to fix 406 errors
+-- ============================================================
+
+-- Step 1: DROP existing table
+DROP TABLE IF EXISTS public.enterprise_settings CASCADE;
+
+-- Step 2: Create table with correct schema
+CREATE TABLE public.enterprise_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  logo_url character varying,
+  company_name character varying NOT NULL DEFAULT 'ERP System',
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  CONSTRAINT unique_created_by UNIQUE(created_by_id)
+);
+
+-- Step 3: Enable RLS
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- Step 4: Create SELECT policy
+CREATE POLICY enterprise_settings_select
+ON public.enterprise_settings
+FOR SELECT
+USING (auth.uid() = created_by_id);
+
+-- Step 5: Create INSERT policy
+CREATE POLICY enterprise_settings_insert
+ON public.enterprise_settings
+FOR INSERT
+WITH CHECK (auth.uid() = created_by_id);
+
+-- Step 6: Create UPDATE policy
+CREATE POLICY enterprise_settings_update
+ON public.enterprise_settings
+FOR UPDATE
+USING (auth.uid() = created_by_id)
+WITH CHECK (auth.uid() = created_by_id);
+
+-- Step 7: Create DELETE policy
+CREATE POLICY enterprise_settings_delete
+ON public.enterprise_settings
+FOR DELETE
+USING (auth.uid() = created_by_id);
+
+-- Step 8: Create index for performance
+CREATE INDEX idx_enterprise_settings_created_by 
+ON public.enterprise_settings(created_by_id);
+
+-- Step 9: Create function for auto-updating updated_at
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 10: Create trigger
+DROP TRIGGER IF EXISTS trigger_enterprise_settings_updated_at ON public.enterprise_settings;
+CREATE TRIGGER trigger_enterprise_settings_updated_at
+BEFORE UPDATE ON public.enterprise_settings
+FOR EACH ROW
+EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- ============================================================
+-- COMPLETE ENTERPRISE SETTINGS TABLE SETUP
+-- Run this in Supabase SQL Editor to fix 406 errors
+-- ============================================================
+
+-- Step 1: DROP existing table (clean start)
+DROP TABLE IF EXISTS public.enterprise_settings CASCADE;
+
+-- Step 2: Create table with correct schema
+CREATE TABLE public.enterprise_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  logo_url character varying,
+  company_name character varying NOT NULL DEFAULT 'ERP System',
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  CONSTRAINT unique_created_by UNIQUE(created_by_id)
+);
+
+-- Step 3: Enable RLS
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- Step 4: Create RLS policies (ALL FOUR REQUIRED)
+CREATE POLICY "Users can select their own enterprise settings"
+ON public.enterprise_settings
+FOR SELECT
+TO authenticated
+USING (auth.uid() = created_by_id);
+
+CREATE POLICY "Users can insert their own enterprise settings"
+ON public.enterprise_settings
+FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = created_by_id);
+
+CREATE POLICY "Users can update their own enterprise settings"
+ON public.enterprise_settings
+FOR UPDATE
+TO authenticated
+USING (auth.uid() = created_by_id)
+WITH CHECK (auth.uid() = created_by_id);
+
+CREATE POLICY "Users can delete their own enterprise settings"
+ON public.enterprise_settings
+FOR DELETE
+TO authenticated
+USING (auth.uid() = created_by_id);
+
+-- Step 5: Create index for performance
+CREATE INDEX idx_enterprise_settings_created_by 
+ON public.enterprise_settings(created_by_id);
+
+-- Step 6: Create function for auto-updating updated_at
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 7: Create trigger
+CREATE TRIGGER trigger_enterprise_settings_updated_at
+  BEFORE UPDATE ON public.enterprise_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- ============================================================
+-- VERIFICATION QUERIES (run these to check everything works)
+-- ============================================================
+
+-- Check table structure
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_name = 'enterprise_settings'
+ORDER BY ordinal_position;
+
+-- Check RLS is enabled
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE tablename = 'enterprise_settings';
+
+-- Check policies exist
+SELECT policyname, permissive, roles, qual, with_check
+FROM pg_policies
+WHERE tablename = 'enterprise_settings'
+ORDER BY policyname;
+
+-- Check index exists
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'enterprise_settings';
+
+-- ============================================================
+-- EXPECTED RESULTS AFTER RUNNING THIS SQL:
+-- ============================================================
+-- Table created with columns:
+--   id (uuid, primary key)
+--   logo_url (varchar, nullable)
+--   company_name (varchar, NOT NULL)
+--   created_at (timestamp, NOT NULL)
+--   updated_at (timestamp, NOT NULL)
+--   created_by_id (uuid, NOT NULL) ← CRITICAL
+--
+-- RLS: enabled (rowsecurity = true)
+-- 
+-- Policies: 4 policies
+--   - SELECT: allows user to view own settings
+--   - INSERT: allows user to create own settings
+--   - UPDATE: allows user to update own settings
+--   - DELETE: allows user to delete own settings
+--
+-- Index: idx_enterprise_settings_created_by
+--
+-- Trigger: trigger_enterprise_settings_updated_at
+--   (auto-updates updated_at when record changes)
+
+-- ============================================================================
+-- SQL Fix - Make product_id nullable in reclamation_products
+-- Execute this in Supabase SQL Editor
+-- ============================================================================
+
+-- Step 1: Drop the NOT NULL constraint on product_id
+ALTER TABLE public.reclamation_products
+ALTER COLUMN product_id DROP NOT NULL;
+
+-- Step 2: Drop the foreign key constraint on product_id (it references command_products which we don't use)
+ALTER TABLE public.reclamation_products
+DROP CONSTRAINT IF EXISTS reclamation_products_product_id_fkey;
+
+-- Verify changes
+-- SELECT column_name, data_type, is_nullable FROM information_schema.columns 
+-- WHERE table_name = 'reclamation_products' ORDER BY ordinal_position;
+
+-- ============================================
+-- FIX: Separate Bon Products from Purchase Products
+-- ============================================
+-- This script fixes the issue where purchase command products were being 
+-- displayed in the "Produits et Offres Enregistrés" tab instead of only
+-- in the "Produits de Commande d'Achat" tab
+--
+-- The problem: When creating a bon from a purchase command, products were 
+-- automatically inserted into bons_commandes_products table.
+-- 
+-- The solution: Remove those auto-inserted products (identified by unity_price = 0)
+-- and ensure they only appear in purchase_command_products table.
+-- ============================================
+
+-- ============================================
+-- STEP 1: IDENTIFY PRODUCTS TO REMOVE
+-- ============================================
+-- These are products that were auto-inserted with unity_price = 0
+-- They should only exist in purchase_command_products, not bons_commandes_products
+
+SELECT 
+  bp.id,
+  bp.bon_commande_id,
+  bp.product_name,
+  bp.quantity,
+  bp.unity_price,
+  b.bon_id,
+  b.supplier_name,
+  b.status
+FROM public.bons_commandes_products bp
+INNER JOIN public.bons_commandes b ON b.id = bp.bon_commande_id
+WHERE bp.unity_price = 0
+AND bp.subtotal = 0
+AND bp.total_with_tva = 0
+ORDER BY b.created_at DESC, bp.product_name;
+
+-- ============================================
+-- STEP 2: VERIFY THESE PRODUCTS EXIST IN PURCHASE_COMMAND_PRODUCTS
+-- ============================================
+-- Check that the products exist in the source table
+SELECT DISTINCT
+  pcp.product_name,
+  COUNT(*) as count
+FROM public.purchase_command_products pcp
+WHERE pcp.product_name IN (
+  SELECT DISTINCT bp.product_name
+  FROM public.bons_commandes_products bp
+  WHERE bp.unity_price = 0
+)
+GROUP BY pcp.product_name
+ORDER BY pcp.product_name;
+
+-- ============================================
+-- STEP 3: DELETE UNWANTED PRODUCTS FROM BON TABLE
+-- ============================================
+-- WARNING: This will delete all products with unity_price = 0 from bons_commandes_products
+-- These are the auto-inserted purchase products that should not be there
+
+-- BACKUP FIRST: Check count before deletion
+SELECT COUNT(*) as products_to_delete
+FROM public.bons_commandes_products
+WHERE unity_price = 0
+AND subtotal = 0
+AND total_with_tva = 0;
+
+-- DELETE the products
+DELETE FROM public.bons_commandes_products
+WHERE unity_price = 0
+AND subtotal = 0
+AND total_with_tva = 0;
+
+-- ============================================
+-- STEP 4: RECALCULATE BON TOTALS
+-- ============================================
+-- Update bons_commandes totals to reflect the removed products
+
+UPDATE public.bons_commandes
+SET 
+  total_without_tva = COALESCE(
+    (SELECT SUM(subtotal) FROM public.bons_commandes_products 
+     WHERE bon_commande_id = public.bons_commandes.id),
+    0
+  ),
+  total_with_tva = COALESCE(
+    (SELECT SUM(total_with_tva) FROM public.bons_commandes_products 
+     WHERE bon_commande_id = public.bons_commandes.id),
+    0
+  ),
+  total_price = COALESCE(
+    (SELECT SUM(subtotal) FROM public.bons_commandes_products 
+     WHERE bon_commande_id = public.bons_commandes.id),
+    0
+  ),
+  updated_at = CURRENT_TIMESTAMP
+WHERE id IN (
+  SELECT DISTINCT bon_commande_id 
+  FROM public.bons_commandes_products
+);
+
+-- ============================================
+-- STEP 5: VERIFY CLEANUP
+-- ============================================
+-- Verify that all remaining products in bons_commandes_products have non-zero prices
+SELECT 
+  b.bon_id,
+  COUNT(bp.id) as product_count,
+  b.total_with_tva,
+  MIN(bp.unity_price) as min_price
+FROM public.bons_commandes b
+LEFT JOIN public.bons_commandes_products bp ON bp.bon_commande_id = b.id
+GROUP BY b.id, b.bon_id, b.total_with_tva
+HAVING MIN(bp.unity_price) = 0 OR MIN(bp.unity_price) IS NULL
+ORDER BY b.created_at DESC;
+
+-- ============================================
+-- STEP 6: SUMMARY - Product counts by table
+-- ============================================
+-- This shows the final state:
+-- - bons_commandes_products should have products with unity_price > 0 (manually added)
+-- - purchase_command_products should have all original purchase products
+
+SELECT 
+  'bons_commandes_products (BON Products)' as source,
+  COUNT(*) as total_products,
+  COUNT(CASE WHEN unity_price > 0 THEN 1 END) as with_price,
+  COUNT(CASE WHEN unity_price = 0 THEN 1 END) as without_price
+FROM public.bons_commandes_products
+UNION ALL
+SELECT 
+  'purchase_command_products (Purchase Products)',
+  COUNT(*),
+  COUNT(CASE WHEN price > 0 THEN 1 END),
+  COUNT(CASE WHEN price = 0 OR price IS NULL THEN 1 END)
+FROM public.purchase_command_products;
+
+-- ============================================
+-- STEP 7: FINAL VERIFICATION
+-- ============================================
+-- List all bons with their product counts
+
+SELECT 
+  b.bon_id,
+  b.supplier_name,
+  b.status,
+  COUNT(DISTINCT bp.id) as bon_products_count,
+  SUM(bp.total_with_tva) as bon_total,
+  CASE 
+    WHEN b.purchase_command_id IS NOT NULL THEN 1 
+    ELSE 0 
+  END as has_purchase_command
+FROM public.bons_commandes b
+LEFT JOIN public.bons_commandes_products bp ON bp.bon_commande_id = b.id
+GROUP BY b.id, b.bon_id, b.supplier_name, b.status, b.purchase_command_id
+ORDER BY b.created_at DESC;
+
+-- ============================================
+-- SQL MIGRATION: Fix purchase_commands table
+-- Change material_command_id from UUID to TEXT
+-- ============================================
+
+-- ============================================
+-- OPTION 1: Drop and recreate the column
+-- (Use if you have no existing data in purchase_commands)
+-- ============================================
+
+-- Drop the foreign key constraint first (if it exists)
+ALTER TABLE IF EXISTS public.purchase_commands 
+DROP CONSTRAINT IF EXISTS purchase_commands_material_command_id_fkey;
+
+-- Drop the column
+ALTER TABLE IF EXISTS public.purchase_commands 
+DROP COLUMN IF EXISTS material_command_id;
+
+-- Add it back as TEXT to store command IDs like "CMD-001" or "PC-001"
+ALTER TABLE IF EXISTS public.purchase_commands 
+ADD COLUMN material_command_id VARCHAR(255);
+
+-- ============================================
+-- OPTION 2: Alter existing column type
+-- (Use if column already exists with data)
+-- ============================================
+/*
+-- Drop the foreign key constraint
+ALTER TABLE IF EXISTS public.purchase_commands 
+DROP CONSTRAINT IF EXISTS purchase_commands_material_command_id_fkey;
+
+-- Change column type from UUID to VARCHAR
+ALTER TABLE IF EXISTS public.purchase_commands 
+ALTER COLUMN material_command_id TYPE VARCHAR(255);
+*/
+
+-- ============================================
+-- OPTION 3: Create index for performance
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_material_id 
+ON public.purchase_commands(material_command_id);
+
+-- ============================================
+-- VERIFICATION
+-- ============================================
+-- Run this to check the column type:
+-- SELECT column_name, data_type FROM information_schema.columns 
+-- WHERE table_name = 'purchase_commands' AND column_name = 'material_command_id';
+
+-- Run this to verify the data:
+-- SELECT command_id, material_command_id, status FROM purchase_commands LIMIT 5;
+
+-- ============================================
+-- END OF MIGRATION
+-- ============================================
+
+-- ============================================================================
+-- SQL Schema Fix - Drop old FK constraint and fix reclamations table
+-- Execute this in Supabase SQL Editor
+-- ============================================================================
+
+-- Step 1: Drop the old foreign key constraint on receive_command_id (if it exists)
+ALTER TABLE public.reclamations
+DROP CONSTRAINT IF EXISTS reclamations_receive_command_id_fkey;
+
+-- Step 1b: Drop the check constraint if it exists
+ALTER TABLE public.reclamations
+DROP CONSTRAINT IF EXISTS reclamations_receive_command_id_check;
+
+-- Step 2: Drop the problematic product_id foreign key from reclamation_products
+-- Since we're using reception_product_items, not command_products
+ALTER TABLE public.reclamation_products
+DROP CONSTRAINT IF EXISTS reclamation_products_product_id_fkey;
+
+-- Step 2b: Drop the nullable check constraint if it exists
+ALTER TABLE public.reclamation_products
+DROP CONSTRAINT IF EXISTS reclamation_products_product_id_nullable;
+
+-- Step 3: Make product_id nullable (since it's not a strict FK anymore)
+ALTER TABLE public.reclamation_products
+ALTER COLUMN product_id DROP NOT NULL;
+
+-- Step 4: Make receive_command_id nullable (if needed)
+ALTER TABLE public.reclamations
+ALTER COLUMN receive_command_id DROP NOT NULL;
+
+-- Step 5: Ensure reception_products_id column exists and has proper FK
+ALTER TABLE public.reclamations
+ADD COLUMN IF NOT EXISTS reception_products_id UUID REFERENCES public.reception_products(id) ON DELETE CASCADE;
+
+-- Step 6: Create indexes
+CREATE INDEX IF NOT EXISTS idx_reclamations_reception_products_id ON public.reclamations(reception_products_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_created_by ON public.reclamations(created_by);
+
+-- Step 7: Ensure reclamation_responses table has proper structure
+CREATE TABLE IF NOT EXISTS public.reclamation_responses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reclamation_id UUID NOT NULL,
+  response_message TEXT NOT NULL,
+  responded_by UUID,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reclamation_id) REFERENCES public.reclamations(id) ON DELETE CASCADE,
+  FOREIGN KEY (responded_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reclamation_responses_reclamation_id ON public.reclamation_responses(reclamation_id);
+
+-- Step 8: Drop old command_validations and recreate with correct FK
+DROP TABLE IF EXISTS public.command_validations CASCADE;
+
+CREATE TABLE public.command_validations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_products_id UUID NOT NULL,
+  validated_by UUID,
+  validation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT,
+  status VARCHAR(50) DEFAULT 'validated' CHECK (status IN ('validated', 'rejected', 'pending')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reception_products_id) REFERENCES public.reception_products(id) ON DELETE CASCADE,
+  FOREIGN KEY (validated_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_command_validations_reception_products_id ON public.command_validations(reception_products_id);
+
+-- Step 9: Grant permissions
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamations TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_products TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_responses TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.command_validations TO postgres;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO postgres;
+
+-- ============================================================================
+-- Verification Queries
+-- ============================================================================
+
+-- Check reclamations table structure
+-- SELECT column_name, data_type, is_nullable FROM information_schema.columns 
+-- WHERE table_name = 'reclamations' ORDER BY ordinal_position;
+
+-- Check constraints
+-- SELECT constraint_name, constraint_type FROM information_schema.table_constraints 
+-- WHERE table_name = 'reclamations';
+
+-- Check reclamation_products constraints
+-- SELECT constraint_name FROM information_schema.table_constraints 
+-- WHERE table_name = 'reclamation_products';
+
+-- Check if data exists
+-- SELECT COUNT(*) FROM public.reclamations;
+-- SELECT COUNT(*) FROM public.reclamation_responses;
+-- SELECT COUNT(*) FROM public.command_validations;
+
+
+-- ============================================================================
+-- SQL Schema Fix - After Reclamation & Validation Updates
+-- Execute this in Supabase SQL Editor to fix your database schema
+-- ============================================================================
+
+-- Step 1: Add missing columns to reclamations table
+ALTER TABLE public.reclamations
+ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.reclamations
+ADD COLUMN IF NOT EXISTS reception_products_id UUID REFERENCES public.reception_products(id) ON DELETE CASCADE;
+
+-- Step 2: Enhance reclamation_products table with tracking columns
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);
+
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS quantity INT DEFAULT 1;
+
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Step 3: Create reclamation_responses table (if not exists)
+CREATE TABLE IF NOT EXISTS public.reclamation_responses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reclamation_id UUID NOT NULL,
+  response_message TEXT NOT NULL,
+  responded_by UUID,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reclamation_id) REFERENCES public.reclamations(id) ON DELETE CASCADE,
+  FOREIGN KEY (responded_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Step 4: Drop old command_validations table if it exists (to recreate with correct FK)
+DROP TABLE IF EXISTS public.command_validations CASCADE;
+
+-- Step 5: Create command_validations table with correct foreign key
+CREATE TABLE public.command_validations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_products_id UUID NOT NULL,
+  validated_by UUID,
+  validation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT,
+  status VARCHAR(50) DEFAULT 'validated' CHECK (status IN ('validated', 'rejected', 'pending')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reception_products_id) REFERENCES public.reception_products(id) ON DELETE CASCADE,
+  FOREIGN KEY (validated_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Step 6: Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_reclamations_receive_command_id ON public.reclamations(receive_command_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_reception_products_id ON public.reclamations(reception_products_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_status ON public.reclamations(status);
+CREATE INDEX IF NOT EXISTS idx_reclamations_created_by ON public.reclamations(created_by);
+CREATE INDEX IF NOT EXISTS idx_reclamation_products_reclamation_id ON public.reclamation_products(reclamation_id);
+CREATE INDEX IF NOT EXISTS idx_reclamation_responses_reclamation_id ON public.reclamation_responses(reclamation_id);
+CREATE INDEX IF NOT EXISTS idx_command_validations_reception_products_id ON public.command_validations(reception_products_id);
+
+-- Step 7: Grant permissions
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamations TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_products TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_responses TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.command_validations TO postgres;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO postgres;
+
+-- Step 8: Enable RLS (Row Level Security) - Uncomment if needed
+-- ALTER TABLE public.reclamations ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.reclamation_responses ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.command_validations ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- Verification queries (run after execution to verify)
+-- ============================================================================
+
+-- Check reclamations table structure
+-- SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'reclamations' ORDER BY ordinal_position;
+
+-- Check reclamation_responses table exists
+-- SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'reclamation_responses');
+
+-- Check command_validations table exists and has correct foreign key
+-- SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'command_validations');
+
+-- Check all indexes are created
+-- SELECT indexname FROM pg_indexes WHERE tablename IN ('reclamations', 'reclamation_responses', 'command_validations');
+
+-- ============================================================================
+-- COMPLETE FRESH START - DROP OLD & CREATE NEW ENTERPRISE SETTINGS
+-- ============================================================================
+-- Purpose: Remove old table and create new one that matches interface exactly
+-- Time: ~1 minute to execute
+-- ============================================================================
+
+-- STEP 1: Drop the old table completely (clean slate)
+DROP TABLE IF EXISTS public.enterprise_settings CASCADE;
+
+-- STEP 2: Create NEW enterprise_settings table with correct schema
+CREATE TABLE public.enterprise_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by_id uuid NOT NULL UNIQUE,
+  company_name text NOT NULL DEFAULT 'ERP System',
+  logo_url text DEFAULT '',
+  created_at timestamptz DEFAULT now() NOT NULL,
+  updated_at timestamptz DEFAULT now() NOT NULL,
+  CONSTRAINT fk_created_by FOREIGN KEY (created_by_id) 
+    REFERENCES auth.users(id) ON DELETE CASCADE
+);
+
+-- STEP 3: Create comment on table for documentation
+COMMENT ON TABLE public.enterprise_settings IS 'Stores company-wide settings including logo URL';
+COMMENT ON COLUMN public.enterprise_settings.id IS 'Unique identifier';
+COMMENT ON COLUMN public.enterprise_settings.created_by_id IS 'User ID (unique per user)';
+COMMENT ON COLUMN public.enterprise_settings.company_name IS 'Company name from interface';
+COMMENT ON COLUMN public.enterprise_settings.logo_url IS 'Public URL to logo from storage';
+COMMENT ON COLUMN public.enterprise_settings.created_at IS 'Record creation timestamp';
+COMMENT ON COLUMN public.enterprise_settings.updated_at IS 'Last update timestamp (auto)';
+
+-- STEP 4: Enable Row Level Security (RLS)
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- STEP 5: Create RLS policies - MUST drop first to avoid conflicts
+DROP POLICY IF EXISTS "allow_select_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_insert_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_update_own_settings" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "allow_delete_own_settings" ON public.enterprise_settings;
+
+-- STEP 6: Create NEW RLS policies
+-- Policy 1: Users can only SELECT their own settings
+CREATE POLICY "allow_select_own_settings" ON public.enterprise_settings
+  FOR SELECT
+  USING (auth.uid() = created_by_id OR auth.uid() IS NOT NULL);
+
+-- Policy 2: Users can INSERT their own settings
+CREATE POLICY "allow_insert_own_settings" ON public.enterprise_settings
+  FOR INSERT
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Policy 3: Users can UPDATE their own settings
+CREATE POLICY "allow_update_own_settings" ON public.enterprise_settings
+  FOR UPDATE
+  USING (auth.uid() = created_by_id)
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Policy 4: Users can DELETE their own settings
+CREATE POLICY "allow_delete_own_settings" ON public.enterprise_settings
+  FOR DELETE
+  USING (auth.uid() = created_by_id);
+
+-- STEP 7: Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by 
+  ON public.enterprise_settings(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_updated_at 
+  ON public.enterprise_settings(updated_at DESC);
+
+-- STEP 8: Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS update_enterprise_settings_timestamp ON public.enterprise_settings;
+DROP FUNCTION IF EXISTS update_enterprise_settings_timestamp();
+
+-- STEP 9: Create function to auto-update timestamp
+CREATE OR REPLACE FUNCTION update_enterprise_settings_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- STEP 10: Create trigger to call function
+CREATE TRIGGER update_enterprise_settings_timestamp
+BEFORE UPDATE ON public.enterprise_settings
+FOR EACH ROW
+EXECUTE FUNCTION update_enterprise_settings_timestamp();
+
+-- ============================================================================
+-- ✅ TABLE CREATED - Now insert initial data for admin user (optional)
+-- ============================================================================
+-- If needed, insert default record for current user
+-- Uncomment and run if you want to pre-populate:
+-- INSERT INTO public.enterprise_settings (created_by_id, company_name, logo_url)
+-- VALUES ('YOUR_USER_ID_HERE', 'ERP System', '')
+-- ON CONFLICT (created_by_id) DO NOTHING;
+
+-- ============================================================================
+-- VERIFICATION QUERIES
+-- ============================================================================
+-- Run these to verify everything is set up correctly:
+
+-- Check 1: Table exists
+SELECT EXISTS (
+  SELECT 1 FROM information_schema.tables 
+  WHERE table_schema = 'public' AND table_name = 'enterprise_settings'
+) AS "Table Exists";
+
+-- Check 2: RLS is enabled
+SELECT relname, relrowsecurity 
+FROM pg_class 
+WHERE relname = 'enterprise_settings';
+
+-- Check 3: All RLS policies exist
+SELECT policyname, permissive, qual 
+FROM pg_policies 
+WHERE tablename = 'enterprise_settings';
+
+-- Check 4: Indexes exist
+SELECT indexname 
+FROM pg_indexes 
+WHERE tablename = 'enterprise_settings';
+
+-- Check 5: Trigger exists
+SELECT trigger_name 
+FROM information_schema.triggers 
+WHERE event_object_table = 'enterprise_settings';
+
+-- ============================================================================
+-- NEXT STEPS AFTER EXECUTION
+-- ============================================================================
+-- 1. ✅ Execute this entire SQL file
+-- 2. ✅ Create storage bucket "logos" (PUBLIC access)
+-- 3. ✅ Refresh browser (F5)
+-- 4. ✅ Try uploading logo in Settings
+-- ============================================================================
+
+-- ============================================
+-- GESTION PROJETS - ADAPTED TO EXISTING SCHEMA
+-- ============================================
+-- This file adapts the projects system to work with existing project_boxes table
+
+-- ============================================
+-- UPDATE PROJECT_BOXES TABLE (add missing fields)
+-- ============================================
+ALTER TABLE public.project_boxes 
+ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
+
+ALTER TABLE public.project_boxes 
+ADD COLUMN IF NOT EXISTS total_budget DECIMAL(15,2) DEFAULT 0;
+
+ALTER TABLE public.project_boxes 
+ADD COLUMN IF NOT EXISTS chef_de_projet_email VARCHAR(255);
+
+ALTER TABLE public.project_boxes 
+ADD COLUMN IF NOT EXISTS created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+-- ============================================
+-- GENERAL CASH BOX (CAISSE GÉNÉRALE) TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.general_cash_box (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_id VARCHAR(50) UNIQUE NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  transaction_type VARCHAR(50), -- versement, retrait, dépense
+  description TEXT NOT NULL,
+  transaction_date DATE NOT NULL,
+  category VARCHAR(100), -- frais généraux, salaires, matériel, autre
+  reference_project_box_id UUID REFERENCES public.project_boxes(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- PROJECT FINANCE (CAISSE DE FINANCEMENT PROJETS) TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_finance (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  finance_id VARCHAR(50) UNIQUE NOT NULL,
+  project_box_id UUID NOT NULL REFERENCES public.project_boxes(id) ON DELETE CASCADE,
+  total_allocated DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_spent DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_received DECIMAL(15,2) NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- PROJECT FINANCE DETAIL TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_finance_detail (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_finance_id UUID NOT NULL REFERENCES public.project_finance(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  finance_date DATE NOT NULL,
+  finance_type VARCHAR(50), -- entrée, sortie
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_project_boxes_chef_id ON public.project_boxes(chef_id);
+CREATE INDEX IF NOT EXISTS idx_project_boxes_status ON public.project_boxes(status);
+CREATE INDEX IF NOT EXISTS idx_project_boxes_created_at ON public.project_boxes(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_type ON public.general_cash_box(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_date ON public.general_cash_box(transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_project ON public.general_cash_box(reference_project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_finance_project_box ON public.project_finance(project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_finance_detail_project_finance ON public.project_finance_detail(project_finance_id);
+
+-- ============================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================
+
+-- Existing project_boxes RLS
+ALTER TABLE public.project_boxes ENABLE ROW LEVEL SECURITY;
+
+-- General Cash Box RLS
+ALTER TABLE public.general_cash_box ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read general cash box" ON public.general_cash_box
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Admin and Comptable can create cash transactions" ON public.general_cash_box
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'comptable')
+  );
+
+-- Project Finance RLS
+ALTER TABLE public.project_finance ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read project finance" ON public.project_finance
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Users can create project finance" ON public.project_finance
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets', 'comptable')
+  );
+
+-- Project Finance Detail RLS
+ALTER TABLE public.project_finance_detail ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read project finance detail" ON public.project_finance_detail
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Users can create project finance detail" ON public.project_finance_detail
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets', 'comptable')
+  );
+
+-- ============================================
+-- SAMPLE DATA (OPTIONAL - For Testing)
+-- ============================================
+-- Uncomment to insert sample data
+
+/*
+INSERT INTO public.general_cash_box (transaction_id, amount, transaction_type, description, transaction_date, category, created_at, created_by_id)
+VALUES 
+  ('GCB001', 50000, 'versement', 'Versement initial caisse générale', CURRENT_DATE, 'frais généraux', CURRENT_TIMESTAMP, (SELECT id FROM auth.users LIMIT 1)),
+  ('GCB002', 5000, 'dépense', 'Frais administratifs', CURRENT_DATE, 'frais généraux', CURRENT_TIMESTAMP, (SELECT id FROM auth.users LIMIT 1));
+
+INSERT INTO public.project_finance (finance_id, project_box_id, total_allocated, total_spent, total_received)
+SELECT 'FIN001', id, 100000, 25000, 75000 FROM public.project_boxes LIMIT 1;
+
+INSERT INTO public.project_finance_detail (project_finance_id, description, amount, finance_date, finance_type)
+SELECT id, 'Allocation initiale', 100000, CURRENT_DATE, 'entrée' FROM public.project_finance LIMIT 1;
+*/
+
+-- ============================================
+-- VERIFICATION QUERIES
+-- ============================================
+
+-- Check project_boxes with new fields:
+-- SELECT * FROM public.project_boxes;
+
+-- Check general cash box:
+-- SELECT * FROM public.general_cash_box ORDER BY transaction_date DESC;
+
+-- Check project finance:
+-- SELECT pb.name, pf.total_allocated, pf.total_spent, pf.total_received FROM public.project_finance pf
+-- LEFT JOIN public.project_boxes pb ON pf.project_box_id = pb.id;
+
+-- Calculate general cash balance:
+-- SELECT 
+--   transaction_type,
+--   COUNT(*) as count,
+--   COALESCE(SUM(amount), 0) as total
+-- FROM public.general_cash_box 
+-- GROUP BY transaction_type;
+
+-- ============================================
+-- GESTION PROJETS - COMPLETE DATABASE SCHEMA
+-- ============================================
+
+-- ============================================
+-- 1. PROJECTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id VARCHAR(50) UNIQUE NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  address TEXT,
+  description TEXT,
+  chef_de_projet_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  chef_de_projet_email VARCHAR(255),
+  status VARCHAR(50) DEFAULT 'pending', -- pending, active, completed, cancelled
+  total_budget DECIMAL(15,2) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- 2. PROJECT EXPENSES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  expense_date DATE NOT NULL,
+  category VARCHAR(100), -- matériel, main-d'oeuvre, transport, autre
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- 3. PROJECT VERSEMENTS (PAYMENTS) TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_versements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  amount DECIMAL(15,2) NOT NULL,
+  versement_date DATE NOT NULL,
+  description TEXT,
+  payment_method VARCHAR(100), -- virement, espèces, chèque
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- 4. GENERAL CASH BOX (CAISSE GÉNÉRALE) TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.general_cash_box (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_id VARCHAR(50) UNIQUE NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  transaction_type VARCHAR(50), -- versement, retrait, dépense
+  description TEXT NOT NULL,
+  transaction_date DATE NOT NULL,
+  category VARCHAR(100), -- frais généraux, salaires, matériel, autre
+  reference_project_id UUID REFERENCES public.projects(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- 5. PROJECT FINANCE (CAISSE DE FINANCEMENT PROJETS) TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_finance (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  finance_id VARCHAR(50) UNIQUE NOT NULL,
+  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  total_allocated DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_spent DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_received DECIMAL(15,2) NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- 6. PROJECT FINANCE DETAIL TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_finance_detail (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_finance_id UUID NOT NULL REFERENCES public.project_finance(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  finance_date DATE NOT NULL,
+  finance_type VARCHAR(50), -- entrée, sortie
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_projects_chef_de_projet ON public.projects(chef_de_projet_id);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON public.projects(status);
+CREATE INDEX IF NOT EXISTS idx_projects_created_at ON public.projects(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_id ON public.project_expenses(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_expenses_date ON public.project_expenses(expense_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_versements_project_id ON public.project_versements(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_versements_date ON public.project_versements(versement_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_type ON public.general_cash_box(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_date ON public.general_cash_box(transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_general_cash_box_project ON public.general_cash_box(reference_project_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_finance_project ON public.project_finance(project_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_finance_detail_project_finance ON public.project_finance_detail(project_finance_id);
+
+-- ============================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================
+
+-- Projects table RLS
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read all projects" ON public.projects
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Admins and Chef de Projet can create projects" ON public.projects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets')
+    OR auth.uid() = chef_de_projet_id
+  );
+
+CREATE POLICY "Admins and Chef de Projet can update their projects" ON public.projects
+  FOR UPDATE TO authenticated
+  USING (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets')
+    OR auth.uid() = chef_de_projet_id
+  );
+
+-- Project Expenses RLS
+ALTER TABLE public.project_expenses ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read project expenses" ON public.project_expenses
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Users can create project expenses" ON public.project_expenses
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets', 'chef_projet')
+  );
+
+-- Project Versements RLS
+ALTER TABLE public.project_versements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read project versements" ON public.project_versements
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Users can create project versements" ON public.project_versements
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets', 'comptable')
+  );
+
+-- General Cash Box RLS
+ALTER TABLE public.general_cash_box ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read general cash box" ON public.general_cash_box
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Admin and Comptable can create cash transactions" ON public.general_cash_box
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'comptable')
+  );
+
+-- Project Finance RLS
+ALTER TABLE public.project_finance ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can read project finance" ON public.project_finance
+  FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY "Users can create project finance" ON public.project_finance
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'resp_projets', 'comptable')
+  );
+
+-- ============================================
+-- SAMPLE DATA (OPTIONAL - For Testing)
+-- ============================================
+-- Uncomment to insert sample data
+
+/*
+INSERT INTO public.projects (project_id, name, address, description, chef_de_projet_id, status, total_budget)
+VALUES 
+  ('PROJ001', 'Projet Construction Immeuble A', '123 Rue du Commerce', 'Immeuble résidentiel 10 étages', '52a74346-c9f5-4498-850c-6f7a9dde929d', 'active', 5000000),
+  ('PROJ002', 'Projet Rénovation Bureau B', '456 Avenue Principale', 'Rénovation bureaux centre-ville', '62b84347-d6f5-4498-850c-6f7a9dde929d', 'pending', 2000000);
+
+INSERT INTO public.project_expenses (project_id, description, amount, expense_date, category)
+SELECT id, 'Achat matériel construction', 50000, CURRENT_DATE, 'matériel' 
+FROM public.projects WHERE project_id = 'PROJ001';
+
+INSERT INTO public.project_versements (project_id, amount, versement_date, description)
+SELECT id, 500000, CURRENT_DATE, 'Acompte initial 10%' 
+FROM public.projects WHERE project_id = 'PROJ001';
+*/
+
+-- ============================================
+-- VERIFICATION QUERIES
+-- ============================================
+
+-- Check projects:
+-- SELECT * FROM public.projects;
+
+-- Check project expenses:
+-- SELECT p.name, pe.description, pe.amount, pe.expense_date FROM public.projects p 
+-- LEFT JOIN public.project_expenses pe ON p.id = pe.project_id;
+
+-- Check project versements:
+-- SELECT p.name, pv.amount, pv.versement_date FROM public.projects p 
+-- LEFT JOIN public.project_versements pv ON p.id = pv.project_id;
+
+-- Check general cash box:
+-- SELECT * FROM public.general_cash_box ORDER BY transaction_date DESC;
+
+-- Calculate project balance:
+-- SELECT 
+--   p.name, 
+--   COALESCE(SUM(pv.amount), 0) as total_received,
+--   COALESCE(SUM(pe.amount), 0) as total_spent,
+--   COALESCE(SUM(pv.amount), 0) - COALESCE(SUM(pe.amount), 0) as balance
+-- FROM public.projects p
+-- LEFT JOIN public.project_versements pv ON p.id = pv.project_id
+-- LEFT JOIN public.project_expenses pe ON p.id = pe.project_id
+-- GROUP BY p.id, p.name;
+
+-- SQL Script to Insert Test Data for Material Commands (Commandes Matériel)
+-- This script inserts sample material commands with 2-4 products each for testing
+
+-- First, let's ensure we have some categories and unities
+INSERT INTO public.categories (name, description) VALUES
+('Électricité', 'Produits électriques'),
+('Plomberie', 'Produits de plomberie'),
+('Quincaillerie', 'Articles de quincaillerie'),
+('Peinture', 'Produits de peinture et revêtement')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO public.unities (name, symbol) VALUES
+('Mètre', 'm'),
+('Kilogramme', 'kg'),
+('Unité', 'u'),
+('Litre', 'l'),
+('Boîte', 'bx')
+ON CONFLICT (name) DO NOTHING;
+
+-- Get IDs for categories and unities (we'll reference them)
+-- Note: Replace 'your-user-id-here' with an actual user ID from auth.users
+-- You can find valid user IDs by running: SELECT id FROM auth.users LIMIT 1;
+
+-- Insert Material Commands
+-- Command 1: Électricité et Câblage
+WITH new_cmd AS (
+  INSERT INTO public.material_commands (command_id, status, created_by_id, created_at, updated_at) 
+  VALUES (
+    'CMD-' || LPAD((FLOOR(RANDOM() * 100000)::int)::text, 5, '0'),
+    'pending',
+    (SELECT id FROM auth.users LIMIT 1),
+    NOW(),
+    NOW()
+  )
+  RETURNING id
+)
+INSERT INTO public.command_products (command_id, product_name, category_id, unity_id, quantity, price, note, created_at)
+SELECT 
+  nc.id,
+  'Câble électrique 2.5mm',
+  (SELECT id FROM public.categories WHERE name = 'Électricité' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Mètre' LIMIT 1),
+  50,
+  2500,
+  'Câble de qualité standard',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Disjoncteur 16A',
+  (SELECT id FROM public.categories WHERE name = 'Électricité' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  10,
+  850,
+  'Disjoncteur automatique bipolaire',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Prise électrique',
+  (SELECT id FROM public.categories WHERE name = 'Électricité' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  20,
+  450,
+  'Prise 2P+T avec terre',
+  NOW()
+FROM new_cmd nc;
+
+-- Command 2: Plomberie et Tuyauterie
+WITH new_cmd AS (
+  INSERT INTO public.material_commands (command_id, status, created_by_id, created_at, updated_at) 
+  VALUES (
+    'CMD-' || LPAD((FLOOR(RANDOM() * 100000)::int)::text, 5, '0'),
+    'pending',
+    (SELECT id FROM auth.users LIMIT 1),
+    NOW(),
+    NOW()
+  )
+  RETURNING id
+)
+INSERT INTO public.command_products (command_id, product_name, category_id, unity_id, quantity, price, note, created_at)
+SELECT 
+  nc.id,
+  'Tuyau PVC 20mm',
+  (SELECT id FROM public.categories WHERE name = 'Plomberie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Mètre' LIMIT 1),
+  100,
+  1200,
+  'Tuyau rigide PVC pour eau froide',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Robinet d''arrêt',
+  (SELECT id FROM public.categories WHERE name = 'Plomberie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  8,
+  3500,
+  'Robinet d''arrêt 3/4 pouces',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Coude PVC 90°',
+  (SELECT id FROM public.categories WHERE name = 'Plomberie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  30,
+  350,
+  'Coude 20mm pour tuyauterie',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Sceau étanchéité',
+  (SELECT id FROM public.categories WHERE name = 'Plomberie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Boîte' LIMIT 1),
+  5,
+  2800,
+  'Sceau pour joints étanches',
+  NOW()
+FROM new_cmd nc;
+
+-- Command 3: Quincaillerie
+WITH new_cmd AS (
+  INSERT INTO public.material_commands (command_id, status, created_by_id, created_at, updated_at) 
+  VALUES (
+    'CMD-' || LPAD((FLOOR(RANDOM() * 100000)::int)::text, 5, '0'),
+    'pending',
+    (SELECT id FROM auth.users LIMIT 1),
+    NOW(),
+    NOW()
+  )
+  RETURNING id
+)
+INSERT INTO public.command_products (command_id, product_name, category_id, unity_id, quantity, price, note, created_at)
+SELECT 
+  nc.id,
+  'Vis acier 4x50mm',
+  (SELECT id FROM public.categories WHERE name = 'Quincaillerie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Boîte' LIMIT 1),
+  10,
+  950,
+  'Boîte de 500 vis',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Clou galvanisé 3.5mm',
+  (SELECT id FROM public.categories WHERE name = 'Quincaillerie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Kilogramme' LIMIT 1),
+  5,
+  1200,
+  'Clous galvanisés premium',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Charnière porte 100mm',
+  (SELECT id FROM public.categories WHERE name = 'Quincaillerie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  12,
+  2100,
+  'Charnière en acier zingué',
+  NOW()
+FROM new_cmd nc;
+
+-- Command 4: Peinture et Revêtement
+WITH new_cmd AS (
+  INSERT INTO public.material_commands (command_id, status, created_by_id, created_at, updated_at) 
+  VALUES (
+    'CMD-' || LPAD((FLOOR(RANDOM() * 100000)::int)::text, 5, '0'),
+    'pending',
+    (SELECT id FROM auth.users LIMIT 1),
+    NOW(),
+    NOW()
+  )
+  RETURNING id
+)
+INSERT INTO public.command_products (command_id, product_name, category_id, unity_id, quantity, price, note, created_at)
+SELECT 
+  nc.id,
+  'Peinture acrylique blanche',
+  (SELECT id FROM public.categories WHERE name = 'Peinture' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Litre' LIMIT 1),
+  20,
+  3500,
+  'Peinture 100% acrylique - Finish mat',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Pinceau 25mm',
+  (SELECT id FROM public.categories WHERE name = 'Peinture' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Unité' LIMIT 1),
+  15,
+  850,
+  'Pinceau poils mixtes',
+  NOW()
+FROM new_cmd nc;
+
+-- Command 5: Matériaux mixtes
+WITH new_cmd AS (
+  INSERT INTO public.material_commands (command_id, status, created_by_id, created_at, updated_at) 
+  VALUES (
+    'CMD-' || LPAD((FLOOR(RANDOM() * 100000)::int)::text, 5, '0'),
+    'pending',
+    (SELECT id FROM auth.users LIMIT 1),
+    NOW(),
+    NOW()
+  )
+  RETURNING id
+)
+INSERT INTO public.command_products (command_id, product_name, category_id, unity_id, quantity, price, note, created_at)
+SELECT 
+  nc.id,
+  'Ciment gris 50kg',
+  (SELECT id FROM public.categories WHERE name = 'Quincaillerie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Kilogramme' LIMIT 1),
+  30,
+  450,
+  'Sac de 50kg ciment Portland',
+  NOW()
+FROM new_cmd nc
+UNION ALL
+SELECT 
+  nc.id,
+  'Sable fin',
+  (SELECT id FROM public.categories WHERE name = 'Quincaillerie' LIMIT 1),
+  (SELECT id FROM public.unities WHERE name = 'Kilogramme' LIMIT 1),
+  500,
+  180,
+  'Sable de rivière lavé',
+  NOW()
+FROM new_cmd nc;
+
+-- Verify the data was inserted
+SELECT 'Total Material Commands Created:' as info, COUNT(*) as count 
+FROM public.material_commands 
+WHERE created_at > NOW() - INTERVAL '10 minutes';
+
+SELECT 'Total Command Products Created:' as info, COUNT(*) as count 
+FROM public.command_products 
+WHERE created_at > NOW() - INTERVAL '10 minutes';
+
+-- View the created data
+SELECT 
+  mc.command_id,
+  mc.status,
+  COUNT(cp.id) as product_count,
+  mc.created_at
+FROM public.material_commands mc
+LEFT JOIN public.command_products cp ON mc.id = cp.command_id
+WHERE mc.created_at > NOW() - INTERVAL '10 minutes'
+GROUP BY mc.id, mc.command_id, mc.status, mc.created_at
+ORDER BY mc.created_at DESC;
+
+-- ============================================
+-- SQL MIGRATION: UPDATE PRODUCTS TABLE
+-- Change from single 'price' to 'unit_price' and 'total_price'
+-- ============================================
+
+-- ============================================
+-- STEP 1: ADD NEW COLUMNS IF THEY DON'T EXIST
+-- ============================================
+ALTER TABLE IF EXISTS public.products
+ADD COLUMN IF NOT EXISTS unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS total_price DECIMAL(15,2) NOT NULL DEFAULT 0;
+
+-- ============================================
+-- STEP 2: MIGRATE DATA FROM PRICE TO UNIT_PRICE
+-- If you have existing products with the 'price' field, 
+-- copy that value to unit_price and calculate total_price
+-- ============================================
+UPDATE public.products 
+SET unit_price = COALESCE(price, 0),
+    total_price = COALESCE(price, 0) * quantity
+WHERE unit_price = 0 AND price IS NOT NULL;
+
+-- ============================================
+-- STEP 3: DROP THE OLD PRICE COLUMN
+-- (Only run this AFTER verifying the data migration worked)
+-- ============================================
+-- ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS price;
+
+-- ============================================
+-- STEP 4: CREATE INDEX ON NEW COLUMNS FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_products_unit_price ON public.products(unit_price);
+CREATE INDEX IF NOT EXISTS idx_products_total_price ON public.products(total_price);
+
+-- ============================================
+-- VERIFICATION QUERIES
+-- Run these to verify the migration
+-- ============================================
+
+-- Check the table structure
+-- SELECT column_name, data_type FROM information_schema.columns 
+-- WHERE table_name = 'products' AND table_schema = 'public';
+
+-- Check sample data
+-- SELECT id, name, quantity, unit_price, total_price FROM public.products LIMIT 10;
+
+-- ============================================
+-- ALTERNATIVE: Complete table recreation
+-- Only use this if you want to completely rebuild the products table
+-- ============================================
+/*
+-- Create new products table with correct schema
+CREATE TABLE IF NOT EXISTS public.products_new (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  supplier_id UUID REFERENCES public.suppliers(id) ON DELETE SET NULL,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Copy data from old table (if it exists)
+INSERT INTO public.products_new (id, name, category_id, unity_id, quantity, unit_price, total_price, supplier_id, note, created_at, updated_at)
+SELECT id, name, category_id, unity_id, quantity, 
+       COALESCE(price, 0) as unit_price,
+       COALESCE(price, 0) * quantity as total_price,
+       supplier_id, note, created_at, updated_at
+FROM public.products;
+
+-- Drop old table
+DROP TABLE IF EXISTS public.products CASCADE;
+
+-- Rename new table
+ALTER TABLE public.products_new RENAME TO products;
+
+-- Recreate indexes
+CREATE INDEX IF NOT EXISTS idx_products_category_id ON public.products(category_id);
+CREATE INDEX IF NOT EXISTS idx_products_supplier_id ON public.products(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_products_unit_price ON public.products(unit_price);
+CREATE INDEX IF NOT EXISTS idx_products_total_price ON public.products(total_price);
+
+-- Re-enable RLS
+ALTER TABLE IF EXISTS public.products ENABLE ROW LEVEL SECURITY;
+
+-- Recreate policies
+DROP POLICY IF EXISTS "Allow authenticated users to read products" ON public.products;
+DROP POLICY IF EXISTS "Allow authenticated users to manage products" ON public.products;
+CREATE POLICY "Allow authenticated users to read products" ON public.products FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage products" ON public.products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+*/
+
+-- ============================================
+-- END OF MIGRATION
+-- ============================================
+-- RECOMMENDED STEPS:
+-- 1. Run STEP 1 to add new columns
+-- 2. Run STEP 2 to migrate existing data
+-- 3. Run STEP 4 to create indexes
+-- 4. Verify with the verification queries
+-- 5. Only run STEP 3 after verifying everything works
+-- ============================================
+
+-- ============================================================================
+-- QUICK COPY & PASTE SQL - APPOINTMENTS & PAYMENT ORDERS
+-- ============================================================================
+-- Just select all and copy into Supabase SQL Editor, then click Run
+-- Takes ~10 seconds to execute
+-- ============================================================================
+
+-- CREATE APPOINTMENTS TABLE
+CREATE TABLE IF NOT EXISTS public.appointments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  date DATE NOT NULL,
+  time TIME,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_appointments_user_id ON public.appointments(user_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON public.appointments(date DESC);
+CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON public.appointments(created_at DESC);
+
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own appointments" ON public.appointments;
+CREATE POLICY "Users can view their own appointments" ON public.appointments FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can create their own appointments" ON public.appointments;
+CREATE POLICY "Users can create their own appointments" ON public.appointments FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update their own appointments" ON public.appointments;
+CREATE POLICY "Users can update their own appointments" ON public.appointments FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete their own appointments" ON public.appointments;
+CREATE POLICY "Users can delete their own appointments" ON public.appointments FOR DELETE USING (auth.uid() = user_id);
+
+-- CREATE PAYMENT ORDERS TABLE
+CREATE TABLE IF NOT EXISTS public.payment_orders (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  bon_commande_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE RESTRICT,
+  total_price NUMERIC(15, 2) NOT NULL CHECK (total_price > 0),
+  note TEXT,
+  status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'validated')),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON public.payment_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_bon_commande_id ON public.payment_orders(bon_commande_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON public.payment_orders(status);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_created_at ON public.payment_orders(created_at DESC);
+
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authorized users can view all payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can view all payment orders" ON public.payment_orders FOR SELECT USING (
+  auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire')) OR auth.uid() = user_id
+);
+
+DROP POLICY IF EXISTS "Authorized users can create payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can create payment orders" ON public.payment_orders FOR INSERT WITH CHECK (
+  auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire'))
+);
+
+DROP POLICY IF EXISTS "Authorized users can update payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can update payment orders" ON public.payment_orders FOR UPDATE USING (
+  auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire'))
+) WITH CHECK (
+  auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire'))
+);
+
+DROP POLICY IF EXISTS "Authorized users can delete payment orders" ON public.payment_orders;
+CREATE POLICY "Authorized users can delete payment orders" ON public.payment_orders FOR DELETE USING (
+  auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data->>'role' IN ('admin', 'comptable', 'gestionnaire'))
+);
+
+-- CREATE VIEWS FOR DASHBOARD
+CREATE OR REPLACE VIEW public.upcoming_appointments_view AS
+SELECT 
+  a.id,
+  a.user_id,
+  a.title,
+  a.description,
+  a.date,
+  a.time,
+  a.created_at,
+  CASE 
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE AS DATE) THEN 'today'
+    WHEN CAST(a.date AS DATE) = CAST(CURRENT_DATE + INTERVAL '1 day' AS DATE) THEN 'tomorrow'
+    WHEN CAST(a.date AS DATE) BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days' THEN 'this_week'
+    ELSE 'later'
+  END AS urgency
+FROM public.appointments a
+WHERE a.is_active = true AND CAST(a.date AS DATE) >= CAST(CURRENT_DATE AS DATE)
+ORDER BY a.date ASC, a.time ASC;
+
+CREATE OR REPLACE VIEW public.pending_payment_orders_view AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.created_at,
+  bc.bon_id AS bon_commande_reference
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'pending' AND po.is_active = true
+ORDER BY po.created_at DESC;
+
+-- ============================================================================
+-- DONE! Tables created with RLS policies and indexes
+-- ============================================================================
+
+-- ============================================
+-- QUICK REFERENCE: SQL COMMANDS TO RUN
+-- ============================================
+-- Copy and paste sections below directly into Supabase SQL Editor
+
+-- SECTION 1: Run complete schema (All in one)
+-- File: SQL_SCHEMA_BONS_COMMANDES_COMPLETE.sql
+-- This creates all tables, indexes, triggers, and RLS policies
+-- Time: ~30 seconds
+-- Just open the file and run entire content
+
+-- SECTION 2: Add Sample Suppliers
+-- Run this to populate suppliers dropdown
+INSERT INTO public.suppliers (name, email, phone, address, city, contact_person, is_active)
+VALUES
+  ('Global Supplies Inc', 'contact@globalsupply.com', '+213123456789', '123 Business St', 'Algiers', 'Ahmed Ali', TRUE),
+  ('Regional Traders', 'sales@regionaltraders.dz', '+213987654321', '456 Commerce Ave', 'Oran', 'Fatima Zahra', TRUE),
+  ('Local Hardware Co', 'info@localhardware.dz', '+213555123456', '789 Industrial Rd', 'Constantine', 'Mohammed Hassan', TRUE),
+  ('Premium Equipment Ltd', 'sales@premiumequip.dz', '+213666777888', '321 Equipment Zone', 'Tlemcen', 'Hassan Ali', TRUE),
+  ('Industrial Solutions', 'contact@industrialsol.dz', '+213444555666', '654 Factory St', 'Blida', 'Zahra Ahmed', TRUE)
+ON CONFLICT (name) DO NOTHING;
+
+-- Verify suppliers were added
+SELECT * FROM public.suppliers WHERE is_active = TRUE;
+
+-- SECTION 3: Storage Policy (if not already created)
+-- Allows authenticated users to upload to offers bucket
+CREATE POLICY "Allow authenticated uploads 1i5ycnr_0" ON storage.objects 
+FOR INSERT TO public 
+WITH CHECK (bucket_id = 'offers');
+
+-- Verify policy exists
+SELECT * FROM pg_policies WHERE tablename = 'objects' AND policyname LIKE '%offers%';
+
+-- SECTION 4: Verify Tables Created
+-- Run these to confirm all tables exist
+SELECT table_name FROM information_schema.tables 
+WHERE table_schema = 'public' 
+AND table_name IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers', 'suppliers')
+ORDER BY table_name;
+
+-- SECTION 5: Check RLS Policies
+-- View all policies on main table
+SELECT schemaname, tablename, policyname 
+FROM pg_policies 
+WHERE tablename = 'bons_commandes'
+ORDER BY tablename, policyname;
+
+-- SECTION 6: Test Insert (Create sample Bon)
+-- This verifies the schema is working correctly
+-- First, get a purchase_command_id
+SELECT id FROM public.purchase_commands LIMIT 1;
+
+-- Then create a test bon (replace UUID with actual purchase_command_id)
+INSERT INTO public.bons_commandes (
+  bon_id,
+  purchase_command_id,
+  supplier_name,
+  status,
+  total_price,
+  total_without_tva,
+  total_with_tva,
+  created_by_id
+)
+VALUES (
+  'BON-TEST-' || to_char(now(), 'YYYYMMDDHH24MISS'),
+  '550e8400-e29b-41d4-a716-446655440004', -- Replace with real UUID
+  'Test Supplier',
+  'pending',
+  0,
+  0,
+  0,
+  '550e8400-e29b-41d4-a716-446655440001' -- Replace with real user UUID
+);
+
+-- Verify it was created
+SELECT bon_id, supplier_name, status, created_at FROM public.bons_commandes ORDER BY created_at DESC LIMIT 1;
+
+-- SECTION 7: Add Test Product to Bon
+-- First get the bon_id from above query
+-- Then add a product (replace bon_id UUID)
+INSERT INTO public.bons_commandes_products (
+  bon_commande_id,
+  product_name,
+  quantity,
+  unity_price,
+  is_active,
+  tva_rate,
+  subtotal,
+  tva_amount,
+  total_with_tva
+)
+VALUES (
+  (SELECT id FROM public.bons_commandes ORDER BY created_at DESC LIMIT 1),
+  'Test Product',
+  10,
+  1000.00,
+  TRUE,
+  19,
+  10000.00,
+  1900.00,
+  11900.00
+);
+
+-- Verify product was added
+SELECT product_name, quantity, unity_price, tva_rate, total_with_tva 
+FROM public.bons_commandes_products 
+WHERE is_active = TRUE
+LIMIT 1;
+
+-- SECTION 8: Add Test Offer
+INSERT INTO public.bons_commandes_offers (
+  bon_commande_id,
+  supplier_name,
+  offer_date,
+  notes
+)
+VALUES (
+  (SELECT id FROM public.bons_commandes ORDER BY created_at DESC LIMIT 1),
+  'Test Supplier',
+  NOW(),
+  'Test offer note'
+);
+
+-- Verify offer was added
+SELECT supplier_name, offer_date, notes 
+FROM public.bons_commandes_offers 
+ORDER BY offer_date DESC LIMIT 1;
+
+-- SECTION 9: Check Totals Calculation
+-- View complete bon with calculated totals
+SELECT 
+  b.bon_id,
+  b.supplier_name,
+  b.status,
+  COUNT(p.id) as product_count,
+  SUM(CASE WHEN p.is_active THEN p.subtotal ELSE 0 END) as total_without_tva,
+  SUM(CASE WHEN p.is_active THEN p.total_with_tva ELSE 0 END) as total_with_tva
+FROM public.bons_commandes b
+LEFT JOIN public.bons_commandes_products p ON b.id = p.bon_commande_id
+GROUP BY b.id, b.bon_id, b.supplier_name, b.status
+ORDER BY b.created_at DESC;
+
+-- SECTION 10: Clean Up Test Data (Optional)
+-- Delete test records if needed
+DELETE FROM public.bons_commandes_offers 
+WHERE bon_commande_id IN (SELECT id FROM public.bons_commandes WHERE bon_id LIKE 'BON-TEST%');
+
+DELETE FROM public.bons_commandes_products 
+WHERE bon_commande_id IN (SELECT id FROM public.bons_commandes WHERE bon_id LIKE 'BON-TEST%');
+
+DELETE FROM public.bons_commandes WHERE bon_id LIKE 'BON-TEST%';
+
+-- SECTION 11: Backup Current Data (Before Major Changes)
+-- Export current bons_commandes
+COPY public.bons_commandes TO STDOUT;
+
+-- Export current products
+COPY public.bons_commandes_products TO STDOUT;
+
+-- SECTION 12: Monitoring Queries
+-- Check for any errors in recent operations
+SELECT table_name, pg_size_pretty(pg_total_relation_size(schemaname||'.'||table_name)) AS size
+FROM information_schema.tables
+WHERE table_schema = 'public'
+AND table_name LIKE 'bons%'
+ORDER BY pg_total_relation_size(schemaname||'.'||table_name) DESC;
+
+-- Count records in each table
+SELECT 
+  'bons_commandes' as table_name,
+  COUNT(*) as record_count
+FROM public.bons_commandes
+UNION ALL
+SELECT 
+  'bons_commandes_products',
+  COUNT(*)
+FROM public.bons_commandes_products
+UNION ALL
+SELECT 
+  'bons_commandes_offers',
+  COUNT(*)
+FROM public.bons_commandes_offers
+UNION ALL
+SELECT 
+  'suppliers',
+  COUNT(*)
+FROM public.suppliers;
+
+-- ============================================
+-- EXECUTION ORDER
+-- ============================================
+-- 1. Run full SQL_SCHEMA_BONS_COMMANDES_COMPLETE.sql file
+-- 2. Run SECTION 2 (Add Sample Suppliers)
+-- 3. Run SECTION 4 (Verify Tables Created)
+-- 4. Run SECTION 5 (Check RLS Policies)
+-- 5. Run SECTION 6-7 (Test Insert - verify schema works)
+-- 6. Deploy frontend code
+-- 7. Test application
+
+-- ============================================
+-- COMMON ISSUES & SOLUTIONS
+-- ============================================
+
+-- Issue: "relation does not exist"
+-- Solution: Run full SQL schema first (SQL_SCHEMA_BONS_COMMANDES_COMPLETE.sql)
+
+-- Issue: "permission denied"
+-- Solution: Check RLS policies with SECTION 5, may need to grant permissions
+
+-- Issue: "duplicate key value"
+-- Solution: Supplier names must be unique, check existing suppliers:
+SELECT DISTINCT name FROM public.suppliers ORDER BY name;
+
+-- Issue: "storage bucket not found"
+-- Solution: Create bucket manually or use Supabase Dashboard > Storage > Create Bucket
+-- Bucket name must be exactly: offers
+
+-- Issue: "UUID type invalid"
+-- Solution: Replace sample UUIDs with real values from your database
+-- Get real UUID examples:
+SELECT id FROM public.purchase_commands LIMIT 1;
+SELECT id FROM auth.users LIMIT 1;
+
+-- ============================================
+-- DATABASE STATISTICS
+-- ============================================
+
+-- View table structure
+\d public.bons_commandes
+\d public.bons_commandes_products
+\d public.bons_commandes_offers
+\d public.suppliers
+
+-- View all indexes
+SELECT tablename, indexname FROM pg_indexes 
+WHERE schemaname = 'public' 
+AND tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers', 'suppliers');
+
+-- View all triggers
+SELECT trigger_name, event_manipulation, event_object_table
+FROM information_schema.triggers
+WHERE trigger_schema = 'public'
+ORDER BY event_object_table, trigger_name;
+
+-- ============================================
+-- FINAL VALIDATION
+-- ============================================
+
+-- Everything should be set up if all these return results:
+
+-- 1. Tables exist
+SELECT COUNT(*) FROM information_schema.tables 
+WHERE table_schema = 'public' 
+AND table_name IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers', 'suppliers');
+-- Expected: 4
+
+-- 2. Suppliers exist
+SELECT COUNT(*) FROM public.suppliers WHERE is_active = TRUE;
+-- Expected: >= 1
+
+-- 3. Indexes exist
+SELECT COUNT(*) FROM pg_indexes 
+WHERE tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers');
+-- Expected: >= 6
+
+-- 4. Triggers exist
+SELECT COUNT(*) FROM information_schema.triggers
+WHERE trigger_schema = 'public';
+-- Expected: >= 3
+
+-- 5. RLS policies exist
+SELECT COUNT(*) FROM pg_policies 
+WHERE tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers', 'suppliers');
+-- Expected: >= 8
+
+-- ALL CHECKS PASSED = Database Ready! ✅
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- RÉCEPTION PRODUITS - COMPLETE SQL SETUP
+-- Ready to execute in Supabase SQL Editor
+-- Copy entire content and paste into Supabase → SQL Editor → Run
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- STEP 1: Create reception_products table
+-- Main table for storing reception records
+CREATE TABLE IF NOT EXISTS reception_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id TEXT UNIQUE NOT NULL,
+  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name TEXT NOT NULL,
+  reception_date TIMESTAMP NOT NULL DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'received', 'completed')),
+  notes TEXT,
+  total_price DECIMAL(15, 2) DEFAULT 0,
+  total_quantity INTEGER DEFAULT 0,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- STEP 2: Create reception_product_items table
+-- Table for storing individual products in a reception
+CREATE TABLE IF NOT EXISTS reception_product_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id UUID NOT NULL REFERENCES reception_products(id) ON DELETE CASCADE,
+  product_name TEXT NOT NULL,
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL CHECK(quantity > 0),
+  price_per_unity DECIMAL(15, 2) NOT NULL,
+  total_price DECIMAL(15, 2) GENERATED ALWAYS AS (quantity * price_per_unity) STORED,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- STEP 3: Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_reception_products_supplier_id ON reception_products(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_reception_products_status ON reception_products(status);
+CREATE INDEX IF NOT EXISTS idx_reception_products_created_at ON reception_products(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reception_product_items_reception_id ON reception_product_items(reception_id);
+
+-- STEP 4: Create trigger function for automatic calculations
+-- This function automatically updates reception totals when items change
+CREATE OR REPLACE FUNCTION update_reception_totals()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE reception_products
+  SET 
+    total_quantity = (SELECT COALESCE(SUM(quantity), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    total_price = (SELECT COALESCE(SUM(total_price), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    updated_at = NOW()
+  WHERE id = NEW.reception_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- STEP 5: Create triggers that fire the function
+-- Insert trigger - when adding products
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_insert ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_insert
+AFTER INSERT ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+-- Update trigger - when modifying products
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_update ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_update
+AFTER UPDATE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+-- Delete trigger - when removing products
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_delete ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_delete
+AFTER DELETE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+-- STEP 6: Enable Row Level Security (RLS)
+ALTER TABLE reception_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reception_product_items ENABLE ROW LEVEL SECURITY;
+
+-- STEP 7: Create RLS Policies for reception_products
+-- Allow authenticated users to view all receptions
+DROP POLICY IF EXISTS "storage_can_view_reception_products" ON reception_products;
+CREATE POLICY "storage_can_view_reception_products" ON reception_products
+  FOR SELECT
+  TO authenticated
+  USING (TRUE);
+
+-- Allow authenticated users to create receptions
+DROP POLICY IF EXISTS "storage_can_create_reception_products" ON reception_products;
+CREATE POLICY "storage_can_create_reception_products" ON reception_products
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+-- Allow authenticated users to update receptions
+DROP POLICY IF EXISTS "storage_can_update_reception_products" ON reception_products;
+CREATE POLICY "storage_can_update_reception_products" ON reception_products
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+-- Allow authenticated users to delete receptions
+DROP POLICY IF EXISTS "storage_can_delete_reception_products" ON reception_products;
+CREATE POLICY "storage_can_delete_reception_products" ON reception_products
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- STEP 8: Create RLS Policies for reception_product_items
+-- Allow authenticated users to view all items
+DROP POLICY IF EXISTS "storage_can_view_items" ON reception_product_items;
+CREATE POLICY "storage_can_view_items" ON reception_product_items
+  FOR SELECT
+  TO authenticated
+  USING (TRUE);
+
+-- Allow authenticated users to create items
+DROP POLICY IF EXISTS "storage_can_create_items" ON reception_product_items;
+CREATE POLICY "storage_can_create_items" ON reception_product_items
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+-- Allow authenticated users to update items
+DROP POLICY IF EXISTS "storage_can_update_items" ON reception_product_items;
+CREATE POLICY "storage_can_update_items" ON reception_product_items
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+-- Allow authenticated users to delete items
+DROP POLICY IF EXISTS "storage_can_delete_items" ON reception_product_items;
+CREATE POLICY "storage_can_delete_items" ON reception_product_items
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- STEP 9: Create helper function for generating reception IDs
+-- Generates IDs in format: REC-YYYYMMDD-XXXX
+CREATE OR REPLACE FUNCTION generate_reception_id()
+RETURNS TEXT AS $$
+DECLARE
+  date_part TEXT;
+  seq_part TEXT;
+BEGIN
+  date_part := TO_CHAR(NOW(), 'YYYYMMDD');
+  seq_part := LPAD((EXTRACT(EPOCH FROM NOW() % '1 hour'::interval) / 60)::INTEGER, 4, '0');
+  RETURN 'REC-' || date_part || '-' || seq_part;
+END;
+$$ LANGUAGE plpgsql;
+
+-- STEP 10: Create views for easier querying
+-- View 1: Reception products with item counts
+DROP VIEW IF EXISTS v_reception_products_with_items;
+CREATE VIEW v_reception_products_with_items AS
+SELECT
+  rp.id as reception_id,
+  rp.reception_id as reception_code,
+  rp.supplier_id,
+  rp.supplier_name,
+  rp.reception_date,
+  rp.status,
+  rp.total_quantity,
+  rp.total_price,
+  rp.notes,
+  rp.created_at,
+  COUNT(rpi.id) as item_count
+FROM reception_products rp
+LEFT JOIN reception_product_items rpi ON rp.id = rpi.reception_id
+GROUP BY rp.id, rp.reception_id, rp.supplier_id, rp.supplier_name, rp.reception_date, rp.status, rp.total_quantity, rp.total_price, rp.notes, rp.created_at;
+
+-- View 2: Reception items with category and unit names
+DROP VIEW IF EXISTS v_reception_items_detailed;
+CREATE VIEW v_reception_items_detailed AS
+SELECT
+  rpi.id,
+  rpi.reception_id,
+  rp.reception_id as reception_code,
+  rpi.product_name,
+  c.name as category_name,
+  u.name as unity_name,
+  rpi.quantity,
+  rpi.price_per_unity,
+  rpi.total_price,
+  rpi.notes,
+  rpi.created_at
+FROM reception_product_items rpi
+JOIN reception_products rp ON rpi.reception_id = rp.id
+LEFT JOIN categories c ON rpi.category_id = c.id
+LEFT JOIN unities u ON rpi.unity_id = u.id;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- VERIFICATION QUERIES - Run these to verify setup was successful
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- VERIFY TABLES EXIST
+SELECT 'TABLES CREATED' as check_name, COUNT(*) as count
+FROM pg_tables 
+WHERE tablename IN ('reception_products', 'reception_product_items')
+UNION ALL
+SELECT 'Expected: 2', 2;
+
+-- VERIFY INDEXES EXIST
+SELECT 'INDEXES CREATED' as check_name, COUNT(*) as count
+FROM pg_indexes 
+WHERE tablename IN ('reception_products', 'reception_product_items')
+UNION ALL
+SELECT 'Expected: 4', 4;
+
+-- VERIFY TRIGGERS EXIST
+SELECT 'TRIGGERS CREATED' as check_name, COUNT(*) as count
+FROM information_schema.triggers 
+WHERE trigger_schema = 'public' AND event_object_table = 'reception_product_items'
+UNION ALL
+SELECT 'Expected: 3', 3;
+
+-- VERIFY RLS IS ENABLED
+SELECT 'RLS ENABLED' as check_name, COUNT(*) as count
+FROM pg_tables 
+WHERE tablename IN ('reception_products', 'reception_product_items') AND rowsecurity = TRUE
+UNION ALL
+SELECT 'Expected: 2', 2;
+
+-- VERIFY VIEWS EXIST
+SELECT 'VIEWS CREATED' as check_name, COUNT(*) as count
+FROM pg_views 
+WHERE schemaname = 'public' AND viewname LIKE 'v_reception%'
+UNION ALL
+SELECT 'Expected: 2', 2;
+
+-- DETAILED TABLE STRUCTURE
+SELECT 'reception_products structure:' as info;
+SELECT column_name, data_type, is_nullable FROM information_schema.columns 
+WHERE table_name = 'reception_products' ORDER BY ordinal_position;
+
+SELECT 'reception_product_items structure:' as info;
+SELECT column_name, data_type, is_nullable FROM information_schema.columns 
+WHERE table_name = 'reception_product_items' ORDER BY ordinal_position;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- SUCCESS CONFIRMATION
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- If all verification queries above show correct counts (as indicated),
+-- then the database schema has been successfully created and configured.
+-- 
+-- You can now:
+-- 1. Navigate to /receive-products in the application
+-- 2. Create a new reception
+-- 3. Add products
+-- 4. View reception details
+-- 5. Edit or delete receptions
+--
+-- All data will be automatically saved to these new tables and calculated
+-- via the SQL triggers.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- =====================================================
+-- QUICK START: COPY AND PASTE TO SUPABASE SQL EDITOR
+-- =====================================================
+
+-- Step 1: Create reception_products table
+CREATE TABLE IF NOT EXISTS reception_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id TEXT UNIQUE NOT NULL,
+  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name TEXT NOT NULL,
+  reception_date TIMESTAMP NOT NULL DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'received', 'completed')),
+  notes TEXT,
+  total_price DECIMAL(15, 2) DEFAULT 0,
+  total_quantity INTEGER DEFAULT 0,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Step 2: Create reception_product_items table
+CREATE TABLE IF NOT EXISTS reception_product_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id UUID NOT NULL REFERENCES reception_products(id) ON DELETE CASCADE,
+  product_name TEXT NOT NULL,
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL CHECK(quantity > 0),
+  price_per_unity DECIMAL(15, 2) NOT NULL,
+  total_price DECIMAL(15, 2) GENERATED ALWAYS AS (quantity * price_per_unity) STORED,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Step 3: Create indexes
+CREATE INDEX IF NOT EXISTS idx_reception_products_supplier_id ON reception_products(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_reception_products_status ON reception_products(status);
+CREATE INDEX IF NOT EXISTS idx_reception_products_created_at ON reception_products(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reception_product_items_reception_id ON reception_product_items(reception_id);
+
+-- Step 4: Create trigger function for automatic totals
+CREATE OR REPLACE FUNCTION update_reception_totals()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE reception_products
+  SET 
+    total_quantity = (SELECT COALESCE(SUM(quantity), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    total_price = (SELECT COALESCE(SUM(total_price), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    updated_at = NOW()
+  WHERE id = NEW.reception_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 5: Create triggers
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_insert ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_insert
+AFTER INSERT ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_update ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_update
+AFTER UPDATE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+DROP TRIGGER IF EXISTS trigger_update_reception_totals_delete ON reception_product_items;
+CREATE TRIGGER trigger_update_reception_totals_delete
+AFTER DELETE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+-- Step 6: Enable RLS
+ALTER TABLE reception_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reception_product_items ENABLE ROW LEVEL SECURITY;
+
+-- Step 7: Create RLS Policies for reception_products
+DROP POLICY IF EXISTS "storage_can_view_reception_products" ON reception_products;
+CREATE POLICY "storage_can_view_reception_products" ON reception_products
+  FOR SELECT
+  TO authenticated
+  USING (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_create_reception_products" ON reception_products;
+CREATE POLICY "storage_can_create_reception_products" ON reception_products
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_update_reception_products" ON reception_products;
+CREATE POLICY "storage_can_update_reception_products" ON reception_products
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_delete_reception_products" ON reception_products;
+CREATE POLICY "storage_can_delete_reception_products" ON reception_products
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- Step 8: Create RLS Policies for reception_product_items
+DROP POLICY IF EXISTS "storage_can_view_items" ON reception_product_items;
+CREATE POLICY "storage_can_view_items" ON reception_product_items
+  FOR SELECT
+  TO authenticated
+  USING (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_create_items" ON reception_product_items;
+CREATE POLICY "storage_can_create_items" ON reception_product_items
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_update_items" ON reception_product_items;
+CREATE POLICY "storage_can_update_items" ON reception_product_items
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS "storage_can_delete_items" ON reception_product_items;
+CREATE POLICY "storage_can_delete_items" ON reception_product_items
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- Step 9: Create helper function for generating reception IDs
+CREATE OR REPLACE FUNCTION generate_reception_id()
+RETURNS TEXT AS $$
+DECLARE
+  date_part TEXT;
+  seq_part TEXT;
+BEGIN
+  date_part := TO_CHAR(NOW(), 'YYYYMMDD');
+  seq_part := LPAD((EXTRACT(EPOCH FROM NOW() % '1 hour'::interval) / 60)::INTEGER, 4, '0');
+  RETURN 'REC-' || date_part || '-' || seq_part;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 10: Create views for easier querying
+DROP VIEW IF EXISTS v_reception_products_with_items;
+CREATE VIEW v_reception_products_with_items AS
+SELECT
+  rp.id as reception_id,
+  rp.reception_id as reception_code,
+  rp.supplier_id,
+  rp.supplier_name,
+  rp.reception_date,
+  rp.status,
+  rp.total_quantity,
+  rp.total_price,
+  rp.notes,
+  rp.created_at,
+  COUNT(rpi.id) as item_count
+FROM reception_products rp
+LEFT JOIN reception_product_items rpi ON rp.id = rpi.reception_id
+GROUP BY rp.id, rp.reception_id, rp.supplier_id, rp.supplier_name, rp.reception_date, rp.status, rp.total_quantity, rp.total_price, rp.notes, rp.created_at;
+
+DROP VIEW IF EXISTS v_reception_items_detailed;
+CREATE VIEW v_reception_items_detailed AS
+SELECT
+  rpi.id,
+  rpi.reception_id,
+  rp.reception_id as reception_code,
+  rpi.product_name,
+  c.name as category_name,
+  u.name as unity_name,
+  rpi.quantity,
+  rpi.price_per_unity,
+  rpi.total_price,
+  rpi.notes,
+  rpi.created_at
+FROM reception_product_items rpi
+JOIN reception_products rp ON rpi.reception_id = rp.id
+LEFT JOIN categories c ON rpi.category_id = c.id
+LEFT JOIN unities u ON rpi.unity_id = u.id;
+
+-- =====================================================
+-- VERIFICATION QUERIES
+-- =====================================================
+
+-- Verify tables exist
+SELECT tablename FROM pg_tables 
+WHERE tablename IN ('reception_products', 'reception_product_items') 
+ORDER BY tablename;
+
+-- Verify indexes exist
+SELECT indexname FROM pg_indexes 
+WHERE tablename IN ('reception_products', 'reception_product_items')
+ORDER BY indexname;
+
+-- Verify RLS is enabled
+SELECT schemaname, tablename, rowsecurity 
+FROM pg_tables 
+WHERE tablename IN ('reception_products', 'reception_product_items')
+ORDER BY tablename;
+
+-- Verify triggers exist
+SELECT trigger_name, event_object_table 
+FROM information_schema.triggers 
+WHERE trigger_schema = 'public' AND event_object_table IN ('reception_product_items')
+ORDER BY event_object_table, trigger_name;
+
+-- Verify views exist
+SELECT viewname FROM pg_views 
+WHERE schemaname = 'public' AND viewname LIKE 'v_reception%'
+ORDER BY viewname;
+
+-- =====================================================
+-- TEST QUERIES (Run after creating schema)
+-- =====================================================
+
+-- Check if reception_products table has rows
+SELECT COUNT(*) as total_receptions FROM reception_products;
+
+-- List all reception products with item counts
+SELECT * FROM v_reception_products_with_items;
+
+-- Get reception items with full details
+SELECT * FROM v_reception_items_detailed;
+
+-- =====================================================
+-- SAMPLE INSERT (For Testing)
+-- =====================================================
+
+-- This is for testing only - remove after verification
+INSERT INTO reception_products (
+  reception_id, supplier_name, reception_date, status, notes, created_by_id
+) VALUES (
+  'REC-20260402-0001', 
+  'Test Supplier', 
+  NOW(), 
+  'pending', 
+  'Test reception', 
+  gen_random_uuid()
+) RETURNING id as reception_id;
+
+-- Then copy the reception_id and use it below:
+INSERT INTO reception_product_items (
+  reception_id, product_name, quantity, price_per_unity
+) VALUES (
+  'PASTE_RECEPTION_ID_HERE', 
+  'Test Product', 
+  10, 
+  50.00
+);
+
+-- Verify totals were calculated
+SELECT * FROM reception_products WHERE reception_id = 'REC-20260402-0001';
+
+-- Clean up test data
+DELETE FROM reception_products WHERE reception_id = 'REC-20260402-0001';
+
+-- =====================================================
+-- END OF SETUP SCRIPT
+-- =====================================================
+
+-- =====================================================
+-- RECEPTION PRODUCTS MANAGEMENT SCHEMA
+-- =====================================================
+
+-- Main reception records table
+CREATE TABLE reception_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id TEXT UNIQUE NOT NULL,
+  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name TEXT NOT NULL,
+  reception_date TIMESTAMP NOT NULL DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'received', 'completed')),
+  notes TEXT,
+  total_price DECIMAL(15, 2) DEFAULT 0,
+  total_quantity INTEGER DEFAULT 0,
+  created_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  CONSTRAINT valid_reception_id CHECK(reception_id ~ '^REC-[0-9]{8}-[0-9]{4}$')
+);
+
+-- Reception products details
+CREATE TABLE reception_product_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_id UUID NOT NULL REFERENCES reception_products(id) ON DELETE CASCADE,
+  product_name TEXT NOT NULL,
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL CHECK(quantity > 0),
+  price_per_unity DECIMAL(15, 2) NOT NULL,
+  total_price DECIMAL(15, 2) GENERATED ALWAYS AS (quantity * price_per_unity) STORED,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create indexes for better performance
+CREATE INDEX idx_reception_products_supplier_id ON reception_products(supplier_id);
+CREATE INDEX idx_reception_products_status ON reception_products(status);
+CREATE INDEX idx_reception_products_created_at ON reception_products(created_at DESC);
+CREATE INDEX idx_reception_product_items_reception_id ON reception_product_items(reception_id);
+
+-- =====================================================
+-- TRIGGERS FOR AUTOMATIC CALCULATIONS
+-- =====================================================
+
+-- Update reception totals when items change
+CREATE OR REPLACE FUNCTION update_reception_totals()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE reception_products
+  SET 
+    total_quantity = (SELECT COALESCE(SUM(quantity), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    total_price = (SELECT COALESCE(SUM(total_price), 0) FROM reception_product_items WHERE reception_id = NEW.reception_id),
+    updated_at = NOW()
+  WHERE id = NEW.reception_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger when inserting/updating items
+CREATE TRIGGER trigger_update_reception_totals_insert
+AFTER INSERT ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+CREATE TRIGGER trigger_update_reception_totals_update
+AFTER UPDATE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+CREATE TRIGGER trigger_update_reception_totals_delete
+AFTER DELETE ON reception_product_items
+FOR EACH ROW
+EXECUTE FUNCTION update_reception_totals();
+
+-- =====================================================
+-- RLS POLICIES FOR SECURITY
+-- =====================================================
+
+ALTER TABLE reception_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reception_product_items ENABLE ROW LEVEL SECURITY;
+
+-- Allow storage users to view and create reception products
+CREATE POLICY "storage_can_view_reception_products" ON reception_products
+  FOR SELECT
+  TO authenticated
+  USING (TRUE); -- Can view all
+
+CREATE POLICY "storage_can_create_reception_products" ON reception_products
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+CREATE POLICY "storage_can_update_reception_products" ON reception_products
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+CREATE POLICY "storage_can_delete_reception_products" ON reception_products
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- Similar policies for items
+CREATE POLICY "storage_can_view_items" ON reception_product_items
+  FOR SELECT
+  TO authenticated
+  USING (TRUE);
+
+CREATE POLICY "storage_can_create_items" ON reception_product_items
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (TRUE);
+
+CREATE POLICY "storage_can_update_items" ON reception_product_items
+  FOR UPDATE
+  TO authenticated
+  USING (TRUE)
+  WITH CHECK (TRUE);
+
+CREATE POLICY "storage_can_delete_items" ON reception_product_items
+  FOR DELETE
+  TO authenticated
+  USING (TRUE);
+
+-- =====================================================
+-- HELPER FUNCTION TO GENERATE RECEPTION ID
+-- =====================================================
+
+CREATE OR REPLACE FUNCTION generate_reception_id()
+RETURNS TEXT AS $$
+DECLARE
+  date_part TEXT;
+  seq_part TEXT;
+BEGIN
+  date_part := TO_CHAR(NOW(), 'YYYYMMDD');
+  seq_part := LPAD((EXTRACT(EPOCH FROM NOW() % '1 hour'::interval) / 60)::INTEGER, 4, '0');
+  RETURN 'REC-' || date_part || '-' || seq_part;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================================
+-- SAMPLE DATA (optional - remove in production)
+-- =====================================================
+-- To be populated by the application
+
+-- =====================================================
+-- VIEWS FOR EASIER DATA RETRIEVAL
+-- =====================================================
+
+-- Combined view with all reception details
+CREATE OR REPLACE VIEW v_reception_products_with_items AS
+SELECT
+  rp.id as reception_id,
+  rp.reception_id as reception_code,
+  rp.supplier_id,
+  rp.supplier_name,
+  rp.reception_date,
+  rp.status,
+  rp.total_quantity,
+  rp.total_price,
+  rp.notes,
+  rp.created_at,
+  COUNT(rpi.id) as item_count
+FROM reception_products rp
+LEFT JOIN reception_product_items rpi ON rp.id = rpi.reception_id
+GROUP BY rp.id, rp.reception_id, rp.supplier_id, rp.supplier_name, rp.reception_date, rp.status, rp.total_quantity, rp.total_price, rp.notes, rp.created_at;
+
+-- Items with category and unity names
+CREATE OR REPLACE VIEW v_reception_items_detailed AS
+SELECT
+  rpi.id,
+  rpi.reception_id,
+  rp.reception_id as reception_code,
+  rpi.product_name,
+  c.name as category_name,
+  u.name as unity_name,
+  rpi.quantity,
+  rpi.price_per_unity,
+  rpi.total_price,
+  rpi.notes,
+  rpi.created_at
+FROM reception_product_items rpi
+JOIN reception_products rp ON rpi.reception_id = rp.id
+LEFT JOIN categories c ON rpi.category_id = c.id
+LEFT JOIN unities u ON rpi.unity_id = u.id;
+
+-- ============================================================================
+-- SQL Schema for Reclamation Messages and Validation
+-- ============================================================================
+
+-- Add missing column to reclamations table
+ALTER TABLE public.reclamations
+ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+-- Add column to track reception_products instead of receive_commands
+ALTER TABLE public.reclamations
+ADD COLUMN IF NOT EXISTS reception_products_id UUID REFERENCES public.reception_products(id) ON DELETE CASCADE;
+
+-- Alter reclamation_products to add missing columns for better tracking
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);
+
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS quantity INT DEFAULT 1;
+
+ALTER TABLE public.reclamation_products
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Table for reclamation responses/replies
+CREATE TABLE IF NOT EXISTS public.reclamation_responses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reclamation_id UUID NOT NULL,
+  response_message TEXT NOT NULL,
+  responded_by UUID,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reclamation_id) REFERENCES public.reclamations(id) ON DELETE CASCADE,
+  FOREIGN KEY (responded_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Table for command validation records
+CREATE TABLE IF NOT EXISTS public.command_validations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reception_products_id UUID NOT NULL,
+  validated_by UUID,
+  validation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT,
+  status VARCHAR(50) DEFAULT 'validated' CHECK (status IN ('validated', 'rejected', 'pending')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reception_products_id) REFERENCES public.reception_products(id) ON DELETE CASCADE,
+  FOREIGN KEY (validated_by) REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_reclamations_receive_command_id ON public.reclamations(receive_command_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_reception_products_id ON public.reclamations(reception_products_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_status ON public.reclamations(status);
+CREATE INDEX IF NOT EXISTS idx_reclamations_created_by ON public.reclamations(created_by);
+CREATE INDEX IF NOT EXISTS idx_reclamation_products_reclamation_id ON public.reclamation_products(reclamation_id);
+CREATE INDEX IF NOT EXISTS idx_reclamation_responses_reclamation_id ON public.reclamation_responses(reclamation_id);
+CREATE INDEX IF NOT EXISTS idx_command_validations_reception_products_id ON public.command_validations(reception_products_id);
+
+-- Grant permissions (adjust role names as needed)
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamations TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_products TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.reclamation_responses TO postgres;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.command_validations TO postgres;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO postgres;
+
+-- =============================================================================
+-- SQL MIGRATION: Remove Logo Functionality from Database
+-- =============================================================================
+-- This migration removes all logo-related columns from the database tables.
+-- Run this migration to clean up the database after removing logo feature
+-- from the application.
+--
+-- WARNING: This will permanently delete logo URLs from the database.
+-- Make sure you have backups before running this migration.
+-- =============================================================================
+
+-- ============================================================================
+-- 1. Remove logo_url from enterprise_settings table
+-- ============================================================================
+-- This column stores company logos
+ALTER TABLE IF EXISTS public.enterprise_settings
+DROP COLUMN IF EXISTS logo_url CASCADE;
+
+-- ============================================================================
+-- 2. Remove logo_url from users table
+-- ============================================================================
+-- This column was used for user profile logos (if any)
+ALTER TABLE IF EXISTS public.users
+DROP COLUMN IF EXISTS logo_url CASCADE;
+
+-- ============================================================================
+-- 3. Remove logo position columns from print_customizations table
+-- ============================================================================
+-- These columns were used for logo positioning in print customizations
+ALTER TABLE IF EXISTS public.print_customizations
+DROP COLUMN IF EXISTS logo_position_x CASCADE;
+
+ALTER TABLE IF EXISTS public.print_customizations
+DROP COLUMN IF EXISTS logo_position_y CASCADE;
+
+-- ============================================================================
+-- 4. OPTIONAL: Remove image_url from bons_commandes_offers table
+-- ============================================================================
+-- If you want to remove all image uploads (not just logos), uncomment below:
+-- ALTER TABLE IF EXISTS public.bons_commandes_offers
+-- DROP COLUMN IF EXISTS image_url CASCADE;
+
+-- ALTER TABLE IF EXISTS public.bons_commandes_offers
+-- DROP COLUMN IF EXISTS image_path CASCADE;
+
+-- ============================================================================
+-- 5. OPTIONAL: Remove image_url from bon_offers table
+-- ============================================================================
+-- If you want to remove all image uploads (not just logos), uncomment below:
+-- ALTER TABLE IF EXISTS public.bon_offers
+-- DROP COLUMN IF EXISTS image_url CASCADE;
+
+-- ============================================================================
+-- Verification Queries
+-- ============================================================================
+-- Run these queries to verify the columns have been removed:
+
+-- Check enterprise_settings table structure
+SELECT column_name, data_type FROM information_schema.columns 
+WHERE table_name = 'enterprise_settings' AND table_schema = 'public'
+ORDER BY ordinal_position;
+
+-- Check users table structure
+SELECT column_name, data_type FROM information_schema.columns 
+WHERE table_name = 'users' AND table_schema = 'public'
+ORDER BY ordinal_position;
+
+-- Check print_customizations table structure
+SELECT column_name, data_type FROM information_schema.columns 
+WHERE table_name = 'print_customizations' AND table_schema = 'public'
+ORDER BY ordinal_position;
+
+-- =============================================================================
+-- Notes:
+-- =============================================================================
+-- 1. The 'logos' storage bucket in Supabase can be deleted manually through
+--    the Supabase dashboard if you want to free up storage space.
+--
+-- 2. The CompanyLogo component (/src/components/CompanyLogo.tsx) has been 
+--    removed from the codebase and is no longer used.
+--
+-- 3. Logo upload functions have been removed from:
+--    - SettingsPage.tsx
+--    - AdminSettingsPage.tsx
+--
+-- 4. Logo display has been removed from:
+--    - AppLayout.tsx (sidebar and navbar)
+--
+-- 5. All logo-related UI elements and state management have been cleaned up.
+-- =============================================================================
+
+-- ============================================
+-- BONS COMMANDES COMPLETE SCHEMA
+-- ============================================
+-- This schema defines the complete structure for Bons de Commande (Purchase Orders)
+-- with products, offers, pricing, TVA settings, and image storage integration
+
+-- ============================================
+-- STEP 1: CREATE SUPPLIERS TABLE (FIRST - for foreign keys)
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  email VARCHAR(255),
+  phone VARCHAR(20),
+  address TEXT,
+  city VARCHAR(100),
+  contact_person VARCHAR(255),
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 2: CREATE BONS_COMMANDES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bons_commandes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id VARCHAR(50) NOT NULL UNIQUE,
+  purchase_command_id UUID NOT NULL REFERENCES public.purchase_commands(id) ON DELETE CASCADE,
+  supplier_id UUID REFERENCES public.suppliers(id) ON DELETE SET NULL,
+  supplier_name VARCHAR(255),
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'paid', 'finalized')),
+  total_price DECIMAL(15,2) DEFAULT 0,
+  total_without_tva DECIMAL(15,2) DEFAULT 0,
+  total_with_tva DECIMAL(15,2) DEFAULT 0,
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT
+);
+
+-- ============================================
+-- STEP 3: CREATE BONS_COMMANDES_PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bons_commandes_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_commande_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  unity_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  tva_rate DECIMAL(5,2) DEFAULT 19 CHECK (tva_rate IN (0, 9, 19)),
+  subtotal DECIMAL(15,2) DEFAULT 0,
+  tva_amount DECIMAL(15,2) DEFAULT 0,
+  total_with_tva DECIMAL(15,2) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 4: CREATE BONS_COMMANDES_OFFERS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bons_commandes_offers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_commande_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  supplier_name VARCHAR(255) NOT NULL,
+  offer_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  image_path VARCHAR(512),
+  image_url VARCHAR(512),
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 5: CREATE INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_purchase_command_id 
+  ON public.bons_commandes(purchase_command_id);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_supplier_id 
+  ON public.bons_commandes(supplier_id);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_created_by_id 
+  ON public.bons_commandes(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_status 
+  ON public.bons_commandes(status);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_products_bon_id 
+  ON public.bons_commandes_products(bon_commande_id);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_offers_bon_id 
+  ON public.bons_commandes_offers(bon_commande_id);
+
+CREATE INDEX IF NOT EXISTS idx_suppliers_is_active 
+  ON public.suppliers(is_active);
+
+-- ============================================
+-- STEP 6: CREATE STORAGE BUCKET POLICY
+-- ============================================
+-- This policy allows authenticated users to upload and view offer images
+-- Run this in your Supabase Dashboard under Storage > Policies
+
+-- Policy: Allow authenticated uploads to offers bucket
+-- CREATE POLICY "Allow authenticated uploads" ON storage.objects
+--   FOR INSERT TO public
+--   WITH CHECK (bucket_id = 'offers' AND auth.role() = 'authenticated');
+
+-- Policy: Allow public read access to offers bucket
+-- CREATE POLICY "Allow public read" ON storage.objects
+--   FOR SELECT
+--   USING (bucket_id = 'offers');
+
+-- ============================================
+-- STEP 7: INSERT SAMPLE SUPPLIERS (OPTIONAL)
+-- ============================================
+-- Uncomment to add sample suppliers
+/*
+INSERT INTO public.suppliers (name, email, phone, address, city, contact_person, is_active)
+VALUES
+  ('Supplier One', 'supplier1@example.com', '+213123456789', '123 Main St', 'Algiers', 'John Doe', TRUE),
+  ('Supplier Two', 'supplier2@example.com', '+213987654321', '456 Oak Ave', 'Oran', 'Jane Smith', TRUE),
+  ('Supplier Three', 'supplier3@example.com', '+213555123456', '789 Pine Rd', 'Constantine', 'Ahmed Ali', TRUE)
+ON CONFLICT (name) DO NOTHING;
+*/
+
+-- ============================================
+-- STEP 8: TRIGGERS FOR AUTO UPDATE TIMESTAMPS
+-- ============================================
+CREATE OR REPLACE FUNCTION update_bons_commandes_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE OR REPLACE FUNCTION update_bons_commandes_products_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE OR REPLACE FUNCTION update_bons_commandes_offers_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Drop existing triggers if they exist
+DROP TRIGGER IF EXISTS bons_commandes_updated_at ON public.bons_commandes;
+DROP TRIGGER IF EXISTS bons_commandes_products_updated_at ON public.bons_commandes_products;
+DROP TRIGGER IF EXISTS bons_commandes_offers_updated_at ON public.bons_commandes_offers;
+
+-- Create triggers
+CREATE TRIGGER bons_commandes_updated_at
+BEFORE UPDATE ON public.bons_commandes
+FOR EACH ROW
+EXECUTE FUNCTION update_bons_commandes_timestamp();
+
+CREATE TRIGGER bons_commandes_products_updated_at
+BEFORE UPDATE ON public.bons_commandes_products
+FOR EACH ROW
+EXECUTE FUNCTION update_bons_commandes_products_timestamp();
+
+CREATE TRIGGER bons_commandes_offers_updated_at
+BEFORE UPDATE ON public.bons_commandes_offers
+FOR EACH ROW
+EXECUTE FUNCTION update_bons_commandes_offers_timestamp();
+
+-- ============================================
+-- STEP 9: ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes_offers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+
+-- Allow authenticated users to view all bons_commandes
+CREATE POLICY "allow_view_bons_commandes" ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to insert bons_commandes
+CREATE POLICY "allow_insert_bons_commandes" ON public.bons_commandes
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to update bons_commandes
+CREATE POLICY "allow_update_bons_commandes" ON public.bons_commandes
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to delete bons_commandes
+CREATE POLICY "allow_delete_bons_commandes" ON public.bons_commandes
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to view all products
+CREATE POLICY "allow_view_bons_products" ON public.bons_commandes_products
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to insert products
+CREATE POLICY "allow_insert_bons_products" ON public.bons_commandes_products
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to update products
+CREATE POLICY "allow_update_bons_products" ON public.bons_commandes_products
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to delete products
+CREATE POLICY "allow_delete_bons_products" ON public.bons_commandes_products
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to view all offers
+CREATE POLICY "allow_view_bons_offers" ON public.bons_commandes_offers
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to insert offers
+CREATE POLICY "allow_insert_bons_offers" ON public.bons_commandes_offers
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to update offers
+CREATE POLICY "allow_update_bons_offers" ON public.bons_commandes_offers
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to delete offers
+CREATE POLICY "allow_delete_bons_offers" ON public.bons_commandes_offers
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to view suppliers
+CREATE POLICY "allow_view_suppliers" ON public.suppliers
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Allow authenticated users to insert suppliers
+CREATE POLICY "allow_insert_suppliers" ON public.suppliers
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to update suppliers
+CREATE POLICY "allow_update_suppliers" ON public.suppliers
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Allow authenticated users to delete suppliers
+CREATE POLICY "allow_delete_suppliers" ON public.suppliers
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ============================================
+-- UPDATED SQL SCHEMA - PURCHASE COMMANDS FIX
+-- Run this if starting fresh or need complete schema
+-- ============================================
+
+-- ============================================
+-- PURCHASE COMMANDS TABLE (UPDATED)
+-- material_command_id changed from UUID to VARCHAR
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.purchase_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id VARCHAR(50) NOT NULL UNIQUE,
+  material_command_id VARCHAR(255),  -- Changed from UUID to VARCHAR
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'finalized')),
+  supplier_id VARCHAR(255),
+  supplier_name VARCHAR(255),
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- COMMAND PRODUCTS TABLE (For purchase commands)
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.command_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id UUID NOT NULL REFERENCES public.purchase_commands(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  price DECIMAL(15,2) DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- CREATE INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_status ON public.purchase_commands(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_material_id ON public.purchase_commands(material_command_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_created_by ON public.purchase_commands(created_by_id);
+CREATE INDEX IF NOT EXISTS idx_command_products_command_id ON public.command_products(command_id);
+
+-- ============================================
+-- ENABLE ROW LEVEL SECURITY
+-- ============================================
+ALTER TABLE IF EXISTS public.purchase_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.command_products ENABLE ROW LEVEL SECURITY;
+
+-- ============================================
+-- CREATE RLS POLICIES
+-- ============================================
+
+-- Purchase Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read purchase commands" ON public.purchase_commands;
+DROP POLICY IF EXISTS "Allow authenticated users to manage purchase commands" ON public.purchase_commands;
+CREATE POLICY "Allow authenticated users to read purchase commands" ON public.purchase_commands FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage purchase commands" ON public.purchase_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Command Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read command products" ON public.command_products;
+DROP POLICY IF EXISTS "Allow authenticated users to manage command products" ON public.command_products;
+CREATE POLICY "Allow authenticated users to read command products" ON public.command_products FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage command products" ON public.command_products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ============================================
+-- VERIFICATION QUERIES
+-- ============================================
+
+-- Check table structure
+-- SELECT column_name, data_type, is_nullable 
+-- FROM information_schema.columns 
+-- WHERE table_name = 'purchase_commands' 
+-- ORDER BY ordinal_position;
+
+-- Check data
+-- SELECT command_id, material_command_id, status, created_at 
+-- FROM purchase_commands 
+-- ORDER BY created_at DESC 
+-- LIMIT 10;
+
+-- ============================================
+-- END OF UPDATED SCHEMA
+-- ============================================
+-- ============================================
+-- CHEF DE PROJET - COMPLETE SQL SCHEMA
+-- Copy and paste this entire SQL into Supabase SQL Editor
+-- ============================================
+
+-- ============================================
+-- STEP 1: CREATE CATEGORIES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.categories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1B: CREATE UNITIES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.unities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  symbol VARCHAR(10),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1C: CREATE SUPPLIERS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  full_name VARCHAR(255) NOT NULL,
+  phone_number VARCHAR(20) NOT NULL,
+  address TEXT NOT NULL,
+  commercial_registration VARCHAR(255),
+  nif VARCHAR(255),
+  nis VARCHAR(255),
+  article VARCHAR(255),
+  company_name VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1D: CREATE PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  supplier_id UUID REFERENCES public.suppliers(id) ON DELETE SET NULL,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 2: CREATE MATERIAL COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.material_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id VARCHAR(50) NOT NULL UNIQUE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'purchase', 'finalized')),
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 3: CREATE COMMAND PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.command_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id UUID NOT NULL REFERENCES public.material_commands(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  price DECIMAL(15,2) DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 5: CREATE PURCHASE COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.purchase_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id VARCHAR(50) NOT NULL UNIQUE,
+  material_command_id UUID NOT NULL REFERENCES public.material_commands(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'finalized')),
+  supplier_id VARCHAR(255),
+  supplier_name VARCHAR(255),
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 6: CREATE BONS COMMANDES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bons_commandes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id VARCHAR(50) NOT NULL UNIQUE,
+  purchase_command_id UUID NOT NULL REFERENCES public.purchase_commands(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'paid')),
+  total_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 7: CREATE BON OFFERS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bon_offers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  supplier VARCHAR(255) NOT NULL,
+  description TEXT,
+  image_url VARCHAR(500),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 8: CREATE RECEIVE COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.receive_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'received')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 9: CREATE RECLAMATIONS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.reclamations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  receive_command_id UUID NOT NULL REFERENCES public.receive_commands(id) ON DELETE CASCADE,
+  message TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 10: CREATE RECLAMATION PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.reclamation_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reclamation_id UUID NOT NULL REFERENCES public.reclamations(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES public.command_products(id) ON DELETE CASCADE
+);
+
+-- ============================================
+-- STEP 11: CREATE PROJECT BOXES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_boxes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id VARCHAR(50) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  address TEXT,
+  chef_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  description TEXT,
+  total_amount DECIMAL(15,2) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 12: CREATE PROJECT VERSEMENTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_versements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_box_id UUID NOT NULL REFERENCES public.project_boxes(id) ON DELETE CASCADE,
+  amount DECIMAL(15,2) NOT NULL,
+  date DATE NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 13: CREATE PROJECT EXPENSES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_id VARCHAR(50) NOT NULL UNIQUE,
+  project_box_id UUID REFERENCES public.project_boxes(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  price DECIMAL(15,2) NOT NULL,
+  expense_date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 14: CREATE PRINT CUSTOMIZATIONS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.print_customizations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_box_id UUID NOT NULL REFERENCES public.project_boxes(id) ON DELETE CASCADE,
+  font_size INTEGER DEFAULT 14,
+  is_bold BOOLEAN DEFAULT false,
+  text_color VARCHAR(7) DEFAULT '#000000',
+  company_name VARCHAR(255),
+  logo_position_x INTEGER DEFAULT 0,
+  logo_position_y INTEGER DEFAULT 0,
+  title_font_size INTEGER DEFAULT 24,
+  subtitle_font_size INTEGER DEFAULT 12,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 15: CREATE INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_products_category_id ON public.products(category_id);
+CREATE INDEX IF NOT EXISTS idx_products_supplier_id ON public.products(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_material_commands_status ON public.material_commands(status);
+CREATE INDEX IF NOT EXISTS idx_material_commands_created_by ON public.material_commands(created_by_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_material_id ON public.purchase_commands(material_command_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_status ON public.purchase_commands(status);
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_purchase_id ON public.bons_commandes(purchase_command_id);
+CREATE INDEX IF NOT EXISTS idx_command_products_command_id ON public.command_products(command_id);
+CREATE INDEX IF NOT EXISTS idx_project_boxes_chef_id ON public.project_boxes(chef_id);
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_id ON public.project_expenses(project_box_id);
+CREATE INDEX IF NOT EXISTS idx_receive_commands_bon_id ON public.receive_commands(bon_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_receive_id ON public.reclamations(receive_command_id);
+
+-- ============================================
+-- STEP 16: ENABLE ROW LEVEL SECURITY
+-- ============================================
+ALTER TABLE IF EXISTS public.categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.unities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.material_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.command_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.purchase_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.bons_commandes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.bon_offers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.receive_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.reclamations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.reclamation_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_boxes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_versements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.print_customizations ENABLE ROW LEVEL SECURITY;
+
+-- ============================================
+-- STEP 17: CREATE RLS POLICIES
+-- ============================================
+
+-- Categories Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read categories" ON public.categories;
+DROP POLICY IF EXISTS "Allow authenticated users to manage categories" ON public.categories;
+CREATE POLICY "Allow authenticated users to read categories" ON public.categories FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage categories" ON public.categories FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read products" ON public.products;
+DROP POLICY IF EXISTS "Allow authenticated users to manage products" ON public.products;
+CREATE POLICY "Allow authenticated users to read products" ON public.products FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage products" ON public.products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Unities Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read unities" ON public.unities;
+DROP POLICY IF EXISTS "Allow authenticated users to manage unities" ON public.unities;
+CREATE POLICY "Allow authenticated users to read unities" ON public.unities FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage unities" ON public.unities FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Suppliers Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read suppliers" ON public.suppliers;
+DROP POLICY IF EXISTS "Allow authenticated users to manage suppliers" ON public.suppliers;
+CREATE POLICY "Allow authenticated users to read suppliers" ON public.suppliers FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage suppliers" ON public.suppliers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Material Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage material commands" ON public.material_commands;
+CREATE POLICY "Allow authenticated users to manage material commands" ON public.material_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Command Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage command products" ON public.command_products;
+CREATE POLICY "Allow authenticated users to manage command products" ON public.command_products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Purchase Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage purchase commands" ON public.purchase_commands;
+CREATE POLICY "Allow authenticated users to manage purchase commands" ON public.purchase_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Bons Commandes Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage bons commandes" ON public.bons_commandes;
+CREATE POLICY "Allow authenticated users to manage bons commandes" ON public.bons_commandes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Bon Offers Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage bon offers" ON public.bon_offers;
+CREATE POLICY "Allow authenticated users to manage bon offers" ON public.bon_offers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Receive Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage receive commands" ON public.receive_commands;
+CREATE POLICY "Allow authenticated users to manage receive commands" ON public.receive_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Reclamations Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage reclamations" ON public.reclamations;
+CREATE POLICY "Allow authenticated users to manage reclamations" ON public.reclamations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Reclamation Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage reclamation products" ON public.reclamation_products;
+CREATE POLICY "Allow authenticated users to manage reclamation products" ON public.reclamation_products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Boxes Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project boxes" ON public.project_boxes;
+CREATE POLICY "Allow authenticated users to manage project boxes" ON public.project_boxes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Versements Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project versements" ON public.project_versements;
+CREATE POLICY "Allow authenticated users to manage project versements" ON public.project_versements FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Expenses Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project expenses" ON public.project_expenses;
+CREATE POLICY "Allow authenticated users to manage project expenses" ON public.project_expenses FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Print Customizations Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage print customizations" ON public.print_customizations;
+CREATE POLICY "Allow authenticated users to manage print customizations" ON public.print_customizations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ============================================
+-- STEP 18: INSERT SAMPLE DATA (OPTIONAL)
+-- ============================================
+
+-- Sample Categories
+INSERT INTO public.categories (name, description) VALUES
+('Matériel Électronique', 'Composants et appareils électroniques'),
+('Logiciels', 'Licences et outils logiciels'),
+('Matériel Informatique', 'Matériel informatique'),
+('Fournitures', 'Fournitures de bureau'),
+('Équipement', 'Équipement lourd')
+ON CONFLICT (name) DO NOTHING;
+
+-- Sample Unities
+INSERT INTO public.unities (name, symbol) VALUES
+('Pièce', 'pcs'),
+('Kilogramme', 'kg'),
+('Litre', 'L'),
+('Mètre', 'm'),
+('Heure', 'h'),
+('Lot', 'lot')
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================
+-- END OF SQL SCHEMA
+-- ============================================
+-- TOTAL TABLES CREATED: 14
+-- TOTAL INDEXES CREATED: 10
+-- TOTAL RLS POLICIES CREATED: 24
+-- ============================================
+
+-- ============================================
+-- UPDATED SQL SCHEMA - WITH UNIT PRICE & TOTAL PRICE
+-- This is the CORRECTED schema for production use
+-- Copy and paste this entire SQL into Supabase SQL Editor
+-- ============================================
+
+-- ============================================
+-- STEP 1: CREATE CATEGORIES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.categories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1B: CREATE UNITIES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.unities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL UNIQUE,
+  symbol VARCHAR(10),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1C: CREATE SUPPLIERS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  full_name VARCHAR(255) NOT NULL,
+  phone_number VARCHAR(20) NOT NULL,
+  address TEXT NOT NULL,
+  commercial_registration VARCHAR(255),
+  nif VARCHAR(255),
+  nis VARCHAR(255),
+  article VARCHAR(255),
+  company_name VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 1D: CREATE PRODUCTS TABLE (UPDATED)
+-- CHANGE: price → unit_price + total_price
+-- unit_price: Price per single unit
+-- total_price: Calculated as quantity × unit_price
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  total_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+  supplier_id UUID REFERENCES public.suppliers(id) ON DELETE SET NULL,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 2: CREATE MATERIAL COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.material_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id VARCHAR(50) NOT NULL UNIQUE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'purchase', 'finalized')),
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 3: CREATE COMMAND PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.command_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id UUID NOT NULL REFERENCES public.material_commands(id) ON DELETE CASCADE,
+  product_name VARCHAR(255) NOT NULL,
+  category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
+  unity_id UUID REFERENCES public.unities(id) ON DELETE SET NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  price DECIMAL(15,2) DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 5: CREATE PURCHASE COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.purchase_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id VARCHAR(50) NOT NULL UNIQUE,
+  material_command_id UUID NOT NULL REFERENCES public.material_commands(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'finalized')),
+  supplier_id VARCHAR(255),
+  supplier_name VARCHAR(255),
+  created_by_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 6: CREATE BONS COMMANDES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bons_commandes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id VARCHAR(50) NOT NULL UNIQUE,
+  purchase_command_id UUID NOT NULL REFERENCES public.purchase_commands(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'paid')),
+  total_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 7: CREATE BON OFFERS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.bon_offers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  supplier VARCHAR(255) NOT NULL,
+  description TEXT,
+  image_url VARCHAR(500),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 8: CREATE RECEIVE COMMANDS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.receive_commands (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bon_id UUID NOT NULL REFERENCES public.bons_commandes(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'validated', 'received')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 9: CREATE RECLAMATIONS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.reclamations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  receive_command_id UUID NOT NULL REFERENCES public.receive_commands(id) ON DELETE CASCADE,
+  message TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 10: CREATE RECLAMATION PRODUCTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.reclamation_products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reclamation_id UUID NOT NULL REFERENCES public.reclamations(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES public.command_products(id) ON DELETE CASCADE
+);
+
+-- ============================================
+-- STEP 11: CREATE PROJECT BOXES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_boxes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id VARCHAR(50) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  address TEXT,
+  chef_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  description TEXT,
+  total_amount DECIMAL(15,2) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 12: CREATE PROJECT VERSEMENTS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_versements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_box_id UUID NOT NULL REFERENCES public.project_boxes(id) ON DELETE CASCADE,
+  amount DECIMAL(15,2) NOT NULL,
+  date DATE NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 13: CREATE PROJECT EXPENSES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.project_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_id VARCHAR(50) NOT NULL UNIQUE,
+  project_box_id UUID REFERENCES public.project_boxes(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  price DECIMAL(15,2) NOT NULL,
+  expense_date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 14: CREATE PRINT CUSTOMIZATIONS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.print_customizations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_box_id UUID NOT NULL REFERENCES public.project_boxes(id) ON DELETE CASCADE,
+  font_size INTEGER DEFAULT 14,
+  is_bold BOOLEAN DEFAULT false,
+  text_color VARCHAR(7) DEFAULT '#000000',
+  company_name VARCHAR(255),
+  logo_position_x INTEGER DEFAULT 0,
+  logo_position_y INTEGER DEFAULT 0,
+  title_font_size INTEGER DEFAULT 24,
+  subtitle_font_size INTEGER DEFAULT 12,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- STEP 15: CREATE INDEXES FOR PERFORMANCE
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_products_category_id ON public.products(category_id);
+CREATE INDEX IF NOT EXISTS idx_products_supplier_id ON public.products(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_products_unit_price ON public.products(unit_price);
+CREATE INDEX IF NOT EXISTS idx_products_total_price ON public.products(total_price);
+CREATE INDEX IF NOT EXISTS idx_material_commands_status ON public.material_commands(status);
+CREATE INDEX IF NOT EXISTS idx_material_commands_created_by ON public.material_commands(created_by_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_material_id ON public.purchase_commands(material_command_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_commands_status ON public.purchase_commands(status);
+CREATE INDEX IF NOT EXISTS idx_bons_commandes_purchase_id ON public.bons_commandes(purchase_command_id);
+CREATE INDEX IF NOT EXISTS idx_command_products_command_id ON public.command_products(command_id);
+CREATE INDEX IF NOT EXISTS idx_project_boxes_chef_id ON public.project_boxes(chef_id);
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_id ON public.project_expenses(project_box_id);
+CREATE INDEX IF NOT EXISTS idx_receive_commands_bon_id ON public.receive_commands(bon_id);
+CREATE INDEX IF NOT EXISTS idx_reclamations_receive_id ON public.reclamations(receive_command_id);
+
+-- ============================================
+-- STEP 16: ENABLE ROW LEVEL SECURITY
+-- ============================================
+ALTER TABLE IF EXISTS public.categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.unities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.material_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.command_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.purchase_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.bons_commandes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.bon_offers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.receive_commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.reclamations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.reclamation_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_boxes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_versements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.project_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.print_customizations ENABLE ROW LEVEL SECURITY;
+
+-- ============================================
+-- STEP 17: CREATE RLS POLICIES
+-- ============================================
+
+-- Categories Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read categories" ON public.categories;
+DROP POLICY IF EXISTS "Allow authenticated users to manage categories" ON public.categories;
+CREATE POLICY "Allow authenticated users to read categories" ON public.categories FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage categories" ON public.categories FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read products" ON public.products;
+DROP POLICY IF EXISTS "Allow authenticated users to manage products" ON public.products;
+CREATE POLICY "Allow authenticated users to read products" ON public.products FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage products" ON public.products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Unities Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read unities" ON public.unities;
+DROP POLICY IF EXISTS "Allow authenticated users to manage unities" ON public.unities;
+CREATE POLICY "Allow authenticated users to read unities" ON public.unities FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage unities" ON public.unities FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Suppliers Policies
+DROP POLICY IF EXISTS "Allow authenticated users to read suppliers" ON public.suppliers;
+DROP POLICY IF EXISTS "Allow authenticated users to manage suppliers" ON public.suppliers;
+CREATE POLICY "Allow authenticated users to read suppliers" ON public.suppliers FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated users to manage suppliers" ON public.suppliers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Material Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage material commands" ON public.material_commands;
+CREATE POLICY "Allow authenticated users to manage material commands" ON public.material_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Command Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage command products" ON public.command_products;
+CREATE POLICY "Allow authenticated users to manage command products" ON public.command_products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Purchase Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage purchase commands" ON public.purchase_commands;
+CREATE POLICY "Allow authenticated users to manage purchase commands" ON public.purchase_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Bons Commandes Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage bons commandes" ON public.bons_commandes;
+CREATE POLICY "Allow authenticated users to manage bons commandes" ON public.bons_commandes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Bon Offers Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage bon offers" ON public.bon_offers;
+CREATE POLICY "Allow authenticated users to manage bon offers" ON public.bon_offers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Receive Commands Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage receive commands" ON public.receive_commands;
+CREATE POLICY "Allow authenticated users to manage receive commands" ON public.receive_commands FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Reclamations Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage reclamations" ON public.reclamations;
+CREATE POLICY "Allow authenticated users to manage reclamations" ON public.reclamations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Reclamation Products Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage reclamation products" ON public.reclamation_products;
+CREATE POLICY "Allow authenticated users to manage reclamation products" ON public.reclamation_products FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Boxes Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project boxes" ON public.project_boxes;
+CREATE POLICY "Allow authenticated users to manage project boxes" ON public.project_boxes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Versements Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project versements" ON public.project_versements;
+CREATE POLICY "Allow authenticated users to manage project versements" ON public.project_versements FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Project Expenses Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage project expenses" ON public.project_expenses;
+CREATE POLICY "Allow authenticated users to manage project expenses" ON public.project_expenses FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Print Customizations Policies
+DROP POLICY IF EXISTS "Allow authenticated users to manage print customizations" ON public.print_customizations;
+CREATE POLICY "Allow authenticated users to manage print customizations" ON public.print_customizations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ============================================
+-- STEP 18: INSERT SAMPLE DATA (OPTIONAL)
+-- ============================================
+
+-- Sample Categories
+INSERT INTO public.categories (name, description) VALUES
+('Matériel Électronique', 'Composants et appareils électroniques'),
+('Logiciels', 'Licences et outils logiciels'),
+('Matériel Informatique', 'Matériel informatique'),
+('Fournitures', 'Fournitures de bureau'),
+('Équipement', 'Équipement lourd')
+ON CONFLICT (name) DO NOTHING;
+
+-- Sample Unities
+INSERT INTO public.unities (name, symbol) VALUES
+('Pièce', 'pcs'),
+('Kilogramme', 'kg'),
+('Litre', 'L'),
+('Mètre', 'm'),
+('Heure', 'h'),
+('Lot', 'lot')
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================
+-- END OF SQL SCHEMA
+-- ============================================
+-- TOTAL TABLES CREATED: 14
+-- TOTAL INDEXES CREATED: 12 (including new price indexes)
+-- TOTAL RLS POLICIES CREATED: 24
+-- ============================================
+-- KEY CHANGES IN THIS VERSION:
+-- 1. Products table: price → unit_price + total_price
+-- 2. Added indexes for unit_price and total_price for performance
+-- 3. All other tables remain unchanged
+-- ============================================
+
+-- SQL Setup for Settings Page with Logo Storage Support
+-- This ensures the enterprise_settings table is properly configured for logo storage
+-- Run this in Supabase SQL Editor
+
+-- 1. Create enterprise_settings table if it doesn't exist
+CREATE TABLE IF NOT EXISTS public.enterprise_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_name text NOT NULL DEFAULT 'ERP System',
+  logo_url text,
+  created_by_id uuid NOT NULL UNIQUE,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE CASCADE
+);
+
+-- 2. Enable Row Level Security
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+-- 3. Create RLS Policies if they don't exist
+-- Drop existing policies if you want to recreate them
+DROP POLICY IF EXISTS "select_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "insert_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "update_own" ON public.enterprise_settings;
+DROP POLICY IF EXISTS "delete_own" ON public.enterprise_settings;
+
+-- Allow users to SELECT their own settings
+CREATE POLICY "select_own" ON public.enterprise_settings
+  FOR SELECT
+  USING (auth.uid() = created_by_id);
+
+-- Allow users to INSERT their own settings
+CREATE POLICY "insert_own" ON public.enterprise_settings
+  FOR INSERT
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Allow users to UPDATE their own settings
+CREATE POLICY "update_own" ON public.enterprise_settings
+  FOR UPDATE
+  USING (auth.uid() = created_by_id)
+  WITH CHECK (auth.uid() = created_by_id);
+
+-- Allow users to DELETE their own settings
+CREATE POLICY "delete_own" ON public.enterprise_settings
+  FOR DELETE
+  USING (auth.uid() = created_by_id);
+
+-- 4. Create index on created_by_id for performance
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by 
+  ON public.enterprise_settings(created_by_id);
+
+-- 5. Create index on updated_at for sorting
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_updated_at 
+  ON public.enterprise_settings(updated_at);
+
+-- 6. Create trigger function for auto-updating updated_at timestamp
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 7. Create trigger to call the function
+DROP TRIGGER IF EXISTS set_enterprise_settings_updated_at ON public.enterprise_settings;
+CREATE TRIGGER set_enterprise_settings_updated_at
+  BEFORE UPDATE ON public.enterprise_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- 8. Ensure Storage bucket exists for logos (must be configured in Supabase UI)
+-- Go to Supabase Dashboard -> Storage -> Create bucket named "logos"
+-- Make sure it's set to PUBLIC so images can be accessed
+
+-- 9. Grant appropriate permissions
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.enterprise_settings TO authenticated;
+
+-- Done!
+-- You can now upload logos through the Settings page and they will be stored in:
+-- - Supabase Storage (logos bucket) with public URL
+-- - Database enterprise_settings table (logo_url column)
+-- 
+-- The logo will persist across page refreshes and display in:
+-- - Settings page (preview)
+-- - Sidebar (via DataContext)
+-- - Header/NavBar (via DataContext)

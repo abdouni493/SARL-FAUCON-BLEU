@@ -28,6 +28,9 @@ interface BonCommande {
   created_at: string;
   updated_at: string;
   notes?: string;
+  purchase_validated?: boolean;
+  comptable_validated?: boolean;
+  admin_validated?: boolean;
 }
 
 interface BonProduct {
@@ -128,6 +131,8 @@ export default function BonsCommandesPage() {
   const [newOffers, setNewOffers] = useState<BonOffer[]>([
     { supplier_name: '', notes: '' }
   ]);
+  const [userRole, setUserRole] = useState<string>('');
+  const [validatingBonId, setValidatingBonId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -495,9 +500,13 @@ export default function BonsCommandesPage() {
         <div class="detail-item"><h3>${L.isAr ? 'المبلغ بـ TVA' : 'Total TTC'}</h3><p>${totalWithTva.toLocaleString()} DA</p></div>
       </div>
       <h2 class="section-title">${L.isAr ? 'قائمة المنتجات' : 'Liste des Produits'}</h2>
-      <table><thead><tr><th>#</th><th>${L.productName}</th><th>${L.quantity}</th><th>${L.unitPrice}</th><th>TVA %</th><th>${L.totalPrice}</th></tr></thead><tbody>
-      ${bonProducts.map((p, idx) => `<tr><td style="text-align:center;">${idx+1}</td><td class="product-name">${p.product_name}</td><td style="text-align:center;">${p.quantity}</td><td>${p.unity_price.toLocaleString()} DA</td><td style="text-align:center;">${p.tva_rate}%</td><td class="amount">${(p.total_with_tva||0).toLocaleString()} DA</td></tr>`).join('')}
-      <tr class="total-row"><td colspan="4"></td><td>${L.total}:</td><td class="amount">${totalWithTva.toLocaleString()} DA</td></tr>
+      <table><thead><tr><th>#</th><th>${L.productName}</th><th>${L.quantity}</th><th>${L.unitPrice}</th><th>${L.isAr ? 'الإجمالي بدون TVA' : 'Total HT'}</th><th>TVA %</th><th>${L.isAr ? 'الإجمالي مع TVA' : 'Total TTC'}</th></tr></thead><tbody>
+      ${bonProducts.map((p, idx) => {
+        const totalHT = p.quantity * p.unity_price;
+        const totalTTC = totalHT * (1 + p.tva_rate / 100);
+        return `<tr><td style="text-align:center;">${idx+1}</td><td class="product-name">${p.product_name}</td><td style="text-align:center;">${p.quantity}</td><td>${p.unity_price.toLocaleString()} DA</td><td class="amount">${totalHT.toLocaleString()} DA</td><td style="text-align:center;">${p.tva_rate}%</td><td class="amount">${totalTTC.toLocaleString()} DA</td></tr>`;
+      }).join('')}
+      <tr class="total-row"><td colspan="6"></td><td class="amount">${totalWithTva.toLocaleString()} DA</td></tr>
       </tbody></table>
       ${bon.notes ? `<div style="padding:15px;background:#fef3c7;border-radius:8px;border-left:4px solid #f59e0b;margin-top:15px;"><strong>${L.notes}:</strong><br>${bon.notes}</div>` : ''}`;
     openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة بون دي كوموند', fr: 'Bon de Commande' }, enterpriseSettings }, body));
@@ -881,8 +890,9 @@ export default function BonsCommandesPage() {
                       <th className="px-4 py-2 text-left font-semibold">Barcode</th>
                       <th className="px-4 py-2 text-left font-semibold">Quantity</th>
                       <th className="px-4 py-2 text-left font-semibold">Unit Price</th>
+                      <th className="px-4 py-2 text-left font-semibold">Total HT</th>
                       <th className="px-4 py-2 text-left font-semibold">TVA %</th>
-                      <th className="px-4 py-2 text-left font-semibold">Total</th>
+                      <th className="px-4 py-2 text-left font-semibold">Total TTC</th>
                       <th className="px-4 py-2 text-left font-semibold"></th>
                     </tr>
                   </thead>
@@ -942,6 +952,9 @@ export default function BonsCommandesPage() {
                               min="0"
                               className="text-xs"
                             />
+                          </td>
+                          <td className="px-4 py-2 text-right font-semibold">
+                            {subtotal.toLocaleString()} DA
                           </td>
                           <td className="px-4 py-2">
                             <Input
@@ -1041,8 +1054,9 @@ export default function BonsCommandesPage() {
                         <th className="px-4 py-2 text-left font-semibold">Barcode</th>
                         <th className="px-4 py-2 text-center font-semibold">Qty</th>
                         <th className="px-4 py-2 text-right font-semibold">Unit Price</th>
+                        <th className="px-4 py-2 text-right font-semibold">Total HT</th>
                         <th className="px-4 py-2 text-right font-semibold">TVA</th>
-                        <th className="px-4 py-2 text-right font-semibold">Total</th>
+                        <th className="px-4 py-2 text-right font-semibold">Total TTC</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1052,6 +1066,9 @@ export default function BonsCommandesPage() {
                           <td className="px-4 py-2 text-sm">{product.product_barcode || product.barcode || '-'}</td>
                           <td className="px-4 py-2 text-center">{product.quantity}</td>
                           <td className="px-4 py-2 text-right">{product.unity_price.toLocaleString()} DA</td>
+                          <td className="px-4 py-2 text-right font-semibold">
+                            {(product.quantity * product.unity_price).toLocaleString()} DA
+                          </td>
                           <td className="px-4 py-2 text-right">{product.tva_rate}%</td>
                           <td className="px-4 py-2 text-right font-semibold text-blue-700 dark:text-blue-300">
                             {(product.total_with_tva || 0).toLocaleString()} DA

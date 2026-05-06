@@ -1,3 +1,1390 @@
+-- Add project_id column to worker_expenses table
+ALTER TABLE worker_expenses ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project_boxes(id) ON DELETE SET NULL;
+-- Add validation columns to purchase_commands and bons_commandes tables
+ALTER TABLE purchase_commands 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE bons_commandes 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+  -- Delete data from Bons Commandes respecting foreign key constraints
+-- Execute these queries in order to avoid foreign key violations
+
+-- Step 1: Delete from payment_orders (references bons_commandes via bon_commande_id)
+DELETE FROM public.payment_orders;
+
+-- Step 2: Delete from bons_commandes_products (references bons_commandes via bon_commande_id)
+DELETE FROM public.bons_commandes_products;
+
+-- Step 3: Delete from bons_commandes (main table)
+DELETE FROM public.bons_commandes;
+
+-- Verify deletions
+SELECT 
+  'bons_commandes' as table_name,
+  COUNT(*) as record_count
+FROM public.bons_commandes
+UNION ALL
+SELECT 
+  'bons_commandes_products' as table_name,
+  COUNT(*) as record_count
+FROM public.bons_commandes_products
+UNION ALL
+SELECT 
+  'payment_orders' as table_name,
+  COUNT(*) as record_count
+FROM public.payment_orders;
+
+-- ========================================
+-- Add Description Column to Enterprise Settings
+-- ========================================
+-- This script adds a description field to the enterprise_settings table
+-- to store information about the enterprise.
+
+-- Add description column if it doesn't exist
+ALTER TABLE enterprise_settings 
+ADD COLUMN IF NOT EXISTS description TEXT;
+
+-- Add a comment to the column for documentation
+COMMENT ON COLUMN enterprise_settings.description IS 'Description or information about the enterprise';
+
+-- Verify the column was added
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'enterprise_settings' AND column_name = 'description';
+
+-- SQL for enterprise_settings table
+CREATE TABLE enterprise_settings (
+    id SERIAL PRIMARY KEY,
+    created_by_id UUID NOT NULL,
+    company_name VARCHAR(255) NOT NULL,
+    logo_url TEXT,
+    address VARCHAR(255),
+    phone VARCHAR(50),
+    email VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (created_by_id)
+);
+
+-- Optional trigger to keep updated_at current on update
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_enterprise_settings_updated_at
+BEFORE UPDATE ON enterprise_settings
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+-- Index for quick lookup
+CREATE INDEX idx_enterprise_settings_created_by_id ON enterprise_settings(created_by_id);
+
+-- ========================================================================
+-- FIX: 403 FORBIDDEN ERROR FOR BONS_COMMANDES INSERT OPERATIONS
+-- ========================================================================
+-- This script fixes Row-Level Security (RLS) policies that may be blocking
+-- INSERT operations on the bons_commandes table.
+--
+-- CAUSE: RLS policies might be too restrictive or not properly configured
+-- SOLUTION: Recreate permissive RLS policies that allow authenticated users
+-- ========================================================================
+
+-- Step 1: Drop existing policies (if they exist)
+-- This allows us to recreate them with proper permissions
+DROP POLICY IF EXISTS "allow_view_bons_commandes" ON public.bons_commandes;
+DROP POLICY IF EXISTS "allow_insert_bons_commandes" ON public.bons_commandes;
+DROP POLICY IF EXISTS "allow_update_bons_commandes" ON public.bons_commandes;
+DROP POLICY IF EXISTS "allow_delete_bons_commandes" ON public.bons_commandes;
+
+-- Step 2: Ensure RLS is enabled
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- Step 3: Create new, permissive RLS policies for authenticated users
+
+-- Policy 1: Allow authenticated users to SELECT (view) bons_commandes
+CREATE POLICY "allow_view_bons_commandes" ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Policy 2: Allow authenticated users to INSERT (create) bons_commandes
+-- This is the critical policy for fixing the 403 error
+CREATE POLICY "allow_insert_bons_commandes" ON public.bons_commandes
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Policy 3: Allow authenticated users to UPDATE bons_commandes
+CREATE POLICY "allow_update_bons_commandes" ON public.bons_commandes
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Policy 4: Allow authenticated users to DELETE bons_commandes
+CREATE POLICY "allow_delete_bons_commandes" ON public.bons_commandes
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ========================================================================
+-- Step 4: Fix RLS policies for bons_commandes_products table
+-- ========================================================================
+
+DROP POLICY IF EXISTS "allow_view_bons_products" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "allow_insert_bons_products" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "allow_update_bons_products" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "allow_delete_bons_products" ON public.bons_commandes_products;
+
+ALTER TABLE public.bons_commandes_products ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "allow_view_bons_products" ON public.bons_commandes_products
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_insert_bons_products" ON public.bons_commandes_products
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_update_bons_products" ON public.bons_commandes_products
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_delete_bons_products" ON public.bons_commandes_products
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ========================================================================
+-- Step 5: Fix RLS policies for bons_commandes_offers table
+-- ========================================================================
+
+DROP POLICY IF EXISTS "allow_view_bons_offers" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "allow_insert_bons_offers" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "allow_update_bons_offers" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "allow_delete_bons_offers" ON public.bons_commandes_offers;
+
+ALTER TABLE public.bons_commandes_offers ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "allow_view_bons_offers" ON public.bons_commandes_offers
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_insert_bons_offers" ON public.bons_commandes_offers
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_update_bons_offers" ON public.bons_commandes_offers
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "allow_delete_bons_offers" ON public.bons_commandes_offers
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ========================================================================
+-- Step 6: Verify the policies are in place
+-- ========================================================================
+-- Run this query to verify all policies are correctly configured:
+
+SELECT 
+  schemaname, 
+  tablename, 
+  policyname, 
+  permissive,
+  roles,
+  qual,
+  with_check
+FROM pg_policies
+WHERE schemaname = 'public' 
+  AND tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers')
+ORDER BY tablename, policyname;
+
+-- ========================================================================
+-- VERIFICATION CHECKLIST
+-- ========================================================================
+-- After running this script, verify:
+-- 1. ✓ All RLS policies are created (8 policies total)
+-- 2. ✓ All policies are PERMISSIVE (not RESTRICTIVE)
+-- 3. ✓ All policies allow auth.role() = 'authenticated'
+-- 4. ✓ No errors during policy creation
+--
+-- TESTING THE FIX:
+-- 1. Go to the Achat (Purchase) profile
+-- 2. Click "Convert" on a validated purchase command
+-- 3. System should create a new bon_commande successfully
+-- 4. No more 403 Forbidden errors in console
+--
+-- If errors still occur:
+-- - Check Supabase Auth status (user must be logged in)
+-- - Verify internet connection
+-- - Clear browser cache and try again
+-- - Check browser console for detailed error messages
+--
+-- ========================================================================
+-- Fix 409 Conflict Error on Bons Commandes Delete
+-- The issue is that RLS policies don't allow DELETE operations
+
+-- Step 1: Drop existing policies that are too restrictive
+DROP POLICY IF EXISTS "Enable read access for bons_commandes" ON public.bons_commandes;
+DROP POLICY IF EXISTS "bons_commandes_select" ON public.bons_commandes;
+DROP POLICY IF EXISTS "bons_commandes_insert" ON public.bons_commandes;
+DROP POLICY IF EXISTS "bons_commandes_update" ON public.bons_commandes;
+DROP POLICY IF EXISTS "bons_commandes_delete" ON public.bons_commandes;
+
+-- Step 2: Disable and re-enable RLS on bons_commandes to start fresh
+ALTER TABLE public.bons_commandes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- Step 3: Create comprehensive RLS policies for bons_commandes
+
+-- Policy for SELECT - allow all authenticated users
+CREATE POLICY "bons_commandes_select"
+ON public.bons_commandes
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+-- Policy for INSERT - allow authenticated users to create their own records
+CREATE POLICY "bons_commandes_insert"
+ON public.bons_commandes
+FOR INSERT
+WITH CHECK (
+  auth.role() = 'authenticated'
+  AND created_by_id = auth.uid()
+);
+
+-- Policy for UPDATE - allow users to update their own records
+CREATE POLICY "bons_commandes_update"
+ON public.bons_commandes
+FOR UPDATE
+USING (
+  auth.role() = 'authenticated'
+  AND created_by_id = auth.uid()
+)
+WITH CHECK (
+  auth.role() = 'authenticated'
+  AND created_by_id = auth.uid()
+);
+
+-- Policy for DELETE - allow users to delete their own records (THIS FIXES THE 409 ERROR)
+CREATE POLICY "bons_commandes_delete"
+ON public.bons_commandes
+FOR DELETE
+USING (
+  auth.role() = 'authenticated'
+  AND created_by_id = auth.uid()
+);
+
+-- Step 4: Also fix RLS policies for bons_commandes_products table
+
+-- Drop existing policies
+DROP POLICY IF EXISTS "bons_commandes_products_select" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "bons_commandes_products_insert" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "bons_commandes_products_update" ON public.bons_commandes_products;
+DROP POLICY IF EXISTS "bons_commandes_products_delete" ON public.bons_commandes_products;
+
+-- Disable and re-enable RLS
+ALTER TABLE public.bons_commandes_products DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes_products ENABLE ROW LEVEL SECURITY;
+
+-- Create policies for bons_commandes_products
+CREATE POLICY "bons_commandes_products_select"
+ON public.bons_commandes_products
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_products_insert"
+ON public.bons_commandes_products
+FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_products_update"
+ON public.bons_commandes_products
+FOR UPDATE
+USING (auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_products_delete"
+ON public.bons_commandes_products
+FOR DELETE
+USING (auth.role() = 'authenticated');
+
+-- Step 5: Also fix RLS policies for bons_commandes_offers table
+
+-- Drop existing policies
+DROP POLICY IF EXISTS "bons_commandes_offers_select" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "bons_commandes_offers_insert" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "bons_commandes_offers_update" ON public.bons_commandes_offers;
+DROP POLICY IF EXISTS "bons_commandes_offers_delete" ON public.bons_commandes_offers;
+
+-- Disable and re-enable RLS
+ALTER TABLE public.bons_commandes_offers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes_offers ENABLE ROW LEVEL SECURITY;
+
+-- Create policies for bons_commandes_offers
+CREATE POLICY "bons_commandes_offers_select"
+ON public.bons_commandes_offers
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_offers_insert"
+ON public.bons_commandes_offers
+FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_offers_update"
+ON public.bons_commandes_offers
+FOR UPDATE
+USING (auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "bons_commandes_offers_delete"
+ON public.bons_commandes_offers
+FOR DELETE
+USING (auth.role() = 'authenticated');
+
+-- Step 6: Verify the policies are set correctly
+SELECT tablename, rowsecurity 
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers');
+
+-- Step 7: List all active policies
+SELECT schemaname, tablename, policyname, permissive, cmd
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND tablename IN ('bons_commandes', 'bons_commandes_products', 'bons_commandes_offers')
+ORDER BY tablename, policyname;
+
+-- Fix Bons Commandes Totals - Calculate missing totals from products
+-- This migration updates all bons_commandes records with 0 DA totals
+-- by calculating the actual totals from their bons_commandes_products records
+
+-- Step 1: Create a temporary view with calculated totals
+CREATE OR REPLACE VIEW bon_commandes_totals_view AS
+SELECT 
+  bc.id,
+  COALESCE(SUM(bcp.subtotal), 0) as calculated_total_without_tva,
+  COALESCE(SUM(bcp.tva_amount), 0) as calculated_total_tva,
+  COALESCE(SUM(bcp.total_with_tva), 0) as calculated_total_with_tva
+FROM public.bons_commandes bc
+LEFT JOIN public.bons_commandes_products bcp ON bc.id = bcp.bon_commande_id
+GROUP BY bc.id;
+
+-- Step 2: Update bons_commandes with calculated totals from products
+-- Only update records where:
+-- 1. They have products (subtotal > 0), AND
+-- 2. Their current totals are 0 (meaning they were never calculated)
+UPDATE public.bons_commandes bc
+SET 
+  total_without_tva = CASE 
+    WHEN bctv.calculated_total_without_tva > 0 THEN bctv.calculated_total_without_tva
+    ELSE bc.total_without_tva
+  END,
+  total_with_tva = CASE 
+    WHEN bctv.calculated_total_with_tva > 0 THEN bctv.calculated_total_with_tva
+    ELSE bc.total_with_tva
+  END,
+  total_price = CASE 
+    WHEN bctv.calculated_total_with_tva > 0 THEN bctv.calculated_total_with_tva
+    ELSE bc.total_price
+  END,
+  updated_at = NOW()
+FROM bon_commandes_totals_view bctv
+WHERE bc.id = bctv.id
+  AND bc.total_with_tva = 0  -- Only update records with 0 DA
+  AND bctv.calculated_total_with_tva > 0;  -- And they have products to calculate from
+
+-- Step 3: Verify the update
+SELECT 
+  COUNT(*) as total_bons,
+  COUNT(CASE WHEN total_with_tva > 0 THEN 1 END) as bons_with_totals,
+  COUNT(CASE WHEN total_with_tva = 0 THEN 1 END) as bons_without_totals,
+  AVG(total_with_tva) as average_total,
+  MIN(total_with_tva) as min_total,
+  MAX(total_with_tva) as max_total
+FROM public.bons_commandes;
+
+-- Step 4: Show example of updated records
+SELECT 
+  bon_id,
+  supplier_name,
+  total_without_tva,
+  total_with_tva,
+  status,
+  updated_at
+FROM public.bons_commandes
+WHERE total_with_tva > 0
+ORDER BY updated_at DESC
+LIMIT 10;
+
+-- Step 5: Show any bons that still have 0 totals (should be empty or have no products)
+SELECT 
+  bc.id,
+  bc.bon_id,
+  bc.supplier_name,
+  bc.total_with_tva,
+  COUNT(bcp.id) as product_count
+FROM public.bons_commandes bc
+LEFT JOIN public.bons_commandes_products bcp ON bc.id = bcp.bon_commande_id
+WHERE bc.total_with_tva = 0
+GROUP BY bc.id, bc.bon_id, bc.supplier_name, bc.total_with_tva;
+
+-- ============================================================================
+-- FIX FOREIGN KEY CONSTRAINT on material_commands.created_by_id
+-- ============================================================================
+-- Problem: material_commands.created_by_id references users table
+-- Solution: Create user records that match auth.users
+-- ============================================================================
+
+-- STEP 1: Create public.users table records for each authenticated user
+-- These records link auth.users to the public.users table via UUID
+
+INSERT INTO public.users (id, email, role, full_name, username, created_at, updated_at)
+VALUES
+  ('6ca491f6-ac4e-4d22-baa0-9b6208f3a3cc', 'admin@admin.com', 'admin', 'Administrator', 'admin', NOW(), NOW()),
+  ('52a74346-c9f5-4498-850c-6f7a9dde929d', 'chef@projet.com', 'chef_projet', 'Chef de Projet', 'chef_projet', NOW(), NOW()),
+  ('d53dc076-d323-41db-952b-07f16b250159', 'stockage@stockage.com', 'storage', 'Responsable Stockage', 'stockage', NOW(), NOW()),
+  ('3ebb968c-47c8-4d4e-8892-92cb400ac153', 'achats@achats.com', 'purchase', 'Responsable Achats', 'achats', NOW(), NOW()),
+  ('94317379-0894-4203-98ea-5760922f4ad6', 'comptable@comptable.com', 'comptable', 'Comptable', 'comptable', NOW(), NOW())
+ON CONFLICT (id) DO UPDATE SET
+  email = EXCLUDED.email,
+  role = EXCLUDED.role,
+  full_name = EXCLUDED.full_name,
+  username = EXCLUDED.username,
+  updated_at = NOW();
+
+-- STEP 2: Verify the users were created
+SELECT id, email, role, full_name, username FROM public.users 
+WHERE email IN (
+  'admin@admin.com',
+  'chef@projet.com',
+  'stockage@stockage.com',
+  'achats@achats.com',
+  'comptable@comptable.com'
+);
+
+-- STEP 3: Check if there are any material_commands with invalid created_by_id
+SELECT id, created_by_id, created_at 
+FROM material_commands 
+WHERE created_by_id IS NOT NULL
+  AND created_by_id NOT IN (
+    SELECT id FROM public.users
+  );
+
+-- STEP 4: If there are orphaned records, fix them by assigning to admin
+UPDATE material_commands
+SET created_by_id = '6ca491f6-ac4e-4d22-baa0-9b6208f3a3cc'
+WHERE created_by_id IS NOT NULL
+  AND created_by_id NOT IN (
+    SELECT id FROM public.users
+  );
+
+-- ============================================================================
+-- VERIFY FOREIGN KEY CONSTRAINT
+-- ============================================================================
+-- Run this to check that the constraint is working:
+
+SELECT 
+  constraint_name,
+  table_name,
+  column_name
+FROM information_schema.key_column_usage
+WHERE table_name = 'material_commands'
+  AND column_name = 'created_by_id';
+
+-- ============================================================================
+-- TEST: Create a new material_command to verify FK works
+-- ============================================================================
+
+INSERT INTO material_commands (
+  command_id,
+  created_by_id,
+  status,
+  created_at,
+  updated_at
+) VALUES (
+  'TEST-' || TO_CHAR(NOW(), 'YYYYMMDD-HH24MISS'),  -- Generate unique command_id
+  '52a74346-c9f5-4498-850c-6f7a9dde929d',  -- chef@projet.com
+  'pending',
+  NOW(),
+  NOW()
+);
+
+-- ============================================================================
+-- NOTES
+-- ============================================================================
+-- 1. These UUIDs must match exactly with auth.users IDs
+-- 2. The foreign key constraint will now allow material_commands creation
+-- 3. Each user in auth.users has a corresponding record in public.users
+-- 4. Authentication uses auth.users, Commands use public.users for FK
+-- 5. Run STEP 1 first, then verify with STEP 2, STEP 3, STEP 4
+-- ============================================================================
+-- ============================================================================
+-- FIX_PAYMENT_ORDERS_RLS_FINAL.sql
+-- ============================================================================
+-- PURPOSE: Fix 403 Forbidden errors on payment_orders table
+-- ISSUE: Subquery-based RLS policies are too restrictive on Supabase
+-- SOLUTION: Replace with simple auth.role() = 'authenticated' checks
+-- ============================================================================
+
+-- STEP 1: REMOVE OLD RESTRICTIVE POLICIES (safer approach)
+-- Try to remove policies with exact names - if they don't exist, that's OK
+BEGIN;
+
+-- Drop old payment_orders policies (Supabase-safe approach)
+DO $$
+BEGIN
+  -- Try to drop each policy individually
+  BEGIN
+    DROP POLICY "Authorized users can view all payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can create payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can update payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "Authorized users can delete payment orders" ON public.payment_orders;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  -- Try to drop old bons_commandes policies
+  BEGIN
+    DROP POLICY "allow_view_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_insert_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_update_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+  BEGIN
+    DROP POLICY "allow_delete_bons_commandes" ON public.bons_commandes;
+  EXCEPTION WHEN UNDEFINED_OBJECT THEN
+    NULL;
+  END;
+  
+END $$;
+
+COMMIT;
+
+-- ============================================================================
+-- STEP 2: ENSURE RLS IS ENABLED (clean slate)
+-- ============================================================================
+ALTER TABLE public.payment_orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.bons_commandes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- STEP 3: CREATE NEW PERMISSIVE POLICIES FOR payment_orders
+-- ============================================================================
+-- These policies allow ALL AUTHENTICATED users (not just specific roles)
+-- This is more permissive but still requires user to be logged in
+
+-- POLICY 1: SELECT - All authenticated users can read payment orders
+CREATE POLICY "payment_orders_select_authenticated"
+  ON public.payment_orders
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- POLICY 2: INSERT - Authenticated users can create payment orders
+CREATE POLICY "payment_orders_insert_authenticated"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- POLICY 3: UPDATE - Authenticated users can update payment orders
+CREATE POLICY "payment_orders_update_authenticated"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- POLICY 4: DELETE - Authenticated users can delete payment orders
+CREATE POLICY "payment_orders_delete_authenticated"
+  ON public.payment_orders
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 4: CREATE POLICIES FOR bons_commandes (dropdown search)
+-- ============================================================================
+-- The payment_orders interface queries bons_commandes for the search dropdown
+-- This table needs a SELECT policy to allow the search to work
+
+-- POLICY 5: SELECT - All authenticated users can read bons_commandes
+CREATE POLICY "bons_commandes_select_authenticated"
+  ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 5: VERIFY RLS IS ENABLED (checking phase)
+-- ============================================================================
+-- Run these queries to confirm RLS is properly enabled
+-- Expected: both should show 't' (true) for rowsecurity column
+
+-- Check RLS status on both tables
+SELECT 
+  tablename,
+  rowsecurity,
+  CASE WHEN rowsecurity THEN '✅ RLS ENABLED' ELSE '❌ RLS DISABLED' END as status
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename;
+
+-- ============================================================================
+-- STEP 6: LIST ALL ACTIVE POLICIES (verification phase)
+-- ============================================================================
+-- Run this to see all the policies we just created
+-- Expected: 5 total policies (4 for payment_orders, 1 for bons_commandes)
+
+SELECT 
+  schemaname,
+  tablename,
+  policyname,
+  CASE 
+    WHEN qual IS NOT NULL THEN 'Restrictive'
+    ELSE 'Permissive'
+  END as policy_type
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename, policyname;
+
+-- ============================================================================
+-- STEP 7: TEST QUERIES (after executing this SQL, run these in a new query)
+-- ============================================================================
+-- Uncomment and run these queries to test access to both tables
+
+-- Test 1: Count payment orders (SELECT test)
+-- SELECT COUNT(*) as payment_order_count FROM payment_orders;
+-- Expected: 0 or N (no 403 error)
+
+-- Test 2: Count bons commandes (SELECT test)
+-- SELECT COUNT(*) as bons_count FROM bons_commandes;
+-- Expected: 0 or N (no 403 error)
+
+-- Test 3: List bons commandes with relevant fields (for dropdown search)
+-- SELECT id, bon_id, total_price FROM bons_commandes LIMIT 5;
+-- Expected: rows returned with no 403 error
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL, check:
+-- 
+-- ✅ Query executed successfully (no red error messages)
+-- ✅ RLS is enabled on payment_orders (rowsecurity = t)
+-- ✅ RLS is enabled on bons_commandes (rowsecurity = t)
+-- ✅ 5 policies created (4 for payment_orders, 1 for bons_commandes)
+-- ✅ All policies use auth.role() = 'authenticated' condition
+-- 
+-- Then in React App:
+-- ✅ Refresh page (F5)
+-- ✅ Check console: NO 403 Forbidden errors
+-- ✅ Navigate to "Ordres de Paiement"
+-- ✅ See "Aucune donnée" OR list of payment orders (if records exist)
+-- ✅ Search dropdown works for bon de commande
+-- ✅ Can create payment order
+-- ✅ Can edit payment order
+-- ✅ Can delete payment order
+-- ✅ Can validate payment order
+
+-- ============================================================================
+-- TROUBLESHOOTING
+-- ============================================================================
+-- If you still see 403 errors after running this SQL:
+--
+-- 1. VERIFY RLS WAS ACTUALLY ENABLED:
+--    Run: SELECT tablename, rowsecurity FROM pg_tables WHERE tablename IN ('payment_orders', 'bons_commandes');
+--    Should show: rowsecurity = t (true) for both tables
+--
+-- 2. VERIFY POLICIES WERE CREATED:
+--    Run: SELECT tablename, policyname FROM pg_policies WHERE tablename IN ('payment_orders', 'bons_commandes');
+--    Should show: 5 total policies (4 for payment_orders, 1 for bons_commandes)
+--
+-- 3. VERIFY USER IS AUTHENTICATED:
+--    Check browser console: "Logged in with Supabase: [username]"
+--    If not logged in, you cannot access any data
+--
+-- 4. HARD REFRESH BROWSER:
+--    Press Ctrl+Shift+Delete (Windows) to clear cache, then refresh page
+--    Or press Ctrl+F5 (full refresh)
+--
+-- 5. CHECK BROWSER DEVTOOLS NETWORK TAB:
+--    Look at the GET request to payment_orders
+--    Status should be 200 (not 403) after SQL is applied
+--
+-- ============================================================================
+-- ============================================================================
+-- FIX_PAYMENT_ORDERS_RLS_SIMPLE.sql
+-- ============================================================================
+-- SIMPLIFIED VERSION - Use this if the main SQL has issues
+-- PURPOSE: Fix 403 Forbidden errors on payment_orders table
+-- SOLUTION: Replace with simple auth.role() = 'authenticated' checks
+-- ============================================================================
+
+-- ============================================================================
+-- STEP 1: ENSURE RLS IS ENABLED
+-- ============================================================================
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- STEP 2: CREATE NEW PERMISSIVE POLICIES FOR payment_orders
+-- ============================================================================
+-- These policies allow ALL AUTHENTICATED users
+-- This is more permissive but still requires user to be logged in
+
+-- SELECT Policy for payment_orders
+CREATE POLICY "payment_orders_select_authenticated"
+  ON public.payment_orders
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- INSERT Policy for payment_orders
+CREATE POLICY "payment_orders_insert_authenticated"
+  ON public.payment_orders
+  FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- UPDATE Policy for payment_orders
+CREATE POLICY "payment_orders_update_authenticated"
+  ON public.payment_orders
+  FOR UPDATE
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- DELETE Policy for payment_orders
+CREATE POLICY "payment_orders_delete_authenticated"
+  ON public.payment_orders
+  FOR DELETE
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 3: CREATE SELECT POLICY FOR bons_commandes (dropdown search)
+-- ============================================================================
+-- The payment_orders interface queries bons_commandes for the search dropdown
+
+CREATE POLICY "bons_commandes_select_authenticated"
+  ON public.bons_commandes
+  FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- STEP 4: VERIFY RLS IS ENABLED
+-- ============================================================================
+SELECT 
+  tablename,
+  rowsecurity,
+  CASE WHEN rowsecurity THEN '✅ RLS ENABLED' ELSE '❌ RLS DISABLED' END as status
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename;
+
+-- ============================================================================
+-- STEP 5: LIST ALL ACTIVE POLICIES
+-- ============================================================================
+SELECT 
+  schemaname,
+  tablename,
+  policyname
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND tablename IN ('payment_orders', 'bons_commandes')
+ORDER BY tablename, policyname;
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL, verify:
+-- 
+-- ✅ Query executed successfully (no red error messages)
+-- ✅ RLS is enabled on payment_orders (rowsecurity = t)
+-- ✅ RLS is enabled on bons_commandes (rowsecurity = t)
+-- ✅ At least 4-5 policies created
+-- ✅ All policies use auth.role() = 'authenticated' condition
+-- 
+-- Then in React App:
+-- ✅ Refresh page (F5)
+-- ✅ Check console: NO 403 Forbidden errors
+-- ✅ Navigate to "Ordres de Paiement"
+-- ✅ See "Aucune donnée" OR list of payment orders
+-- ✅ Search dropdown works for bon de commande
+-- ✅ Can create/edit/delete payment orders
+
+-- ============================================================================
+-- CRITICAL: Fix RLS policies for payment_orders table
+-- Run this in Supabase SQL Editor to enable access for all authenticated users
+
+-- Step 1: Drop existing restrictive policies
+DROP POLICY IF EXISTS "payment_orders_select_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_insert_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_update_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "payment_orders_delete_own" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable read access for all authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable insert for authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable update for authenticated users" ON public.payment_orders;
+DROP POLICY IF EXISTS "Enable delete for authenticated users" ON public.payment_orders;
+
+-- Step 2: Disable RLS temporarily to ensure clean slate
+ALTER TABLE public.payment_orders DISABLE ROW LEVEL SECURITY;
+
+-- Step 3: Re-enable RLS
+ALTER TABLE public.payment_orders ENABLE ROW LEVEL SECURITY;
+
+-- Step 4: Create comprehensive policies for authenticated users
+-- SELECT: All authenticated users can read payment orders
+CREATE POLICY "Enable read access for all authenticated users"
+ON public.payment_orders
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+-- INSERT: Authenticated users can create payment orders
+CREATE POLICY "Enable insert for authenticated users"
+ON public.payment_orders
+FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+-- UPDATE: Users can update payment orders
+CREATE POLICY "Enable update for authenticated users"
+ON public.payment_orders
+FOR UPDATE
+USING (auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+-- DELETE: Users can delete payment orders
+CREATE POLICY "Enable delete for authenticated users"
+ON public.payment_orders
+FOR DELETE
+USING (auth.role() = 'authenticated');
+
+-- Step 5: Fix bons_commandes RLS
+DROP POLICY IF EXISTS "bons_commandes_select" ON public.bons_commandes;
+DROP POLICY IF EXISTS "Enable read access for bons_commandes" ON public.bons_commandes;
+
+-- Disable and re-enable RLS on bons_commandes
+ALTER TABLE public.bons_commandes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bons_commandes ENABLE ROW LEVEL SECURITY;
+
+-- Allow all authenticated users to read bons_commandes
+CREATE POLICY "Enable read access for bons_commandes"
+ON public.bons_commandes
+FOR SELECT
+USING (auth.role() = 'authenticated');
+
+-- Step 6: Verify RLS is enabled and check policies
+SELECT tablename, rowsecurity 
+FROM pg_tables 
+WHERE schemaname = 'public' 
+AND (tablename = 'payment_orders' OR tablename = 'bons_commandes');
+
+-- Step 7: List all active policies
+SELECT schemaname, tablename, policyname 
+FROM pg_policies 
+WHERE schemaname = 'public' 
+AND (tablename = 'payment_orders' OR tablename = 'bons_commandes')
+ORDER BY tablename, policyname;
+
+===== MIGRATION 1: Payment Orders =====
+ALTER TABLE payment_orders 
+  ALTER COLUMN bon_commande_id DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS beneficiary TEXT;
+
+
+===== MIGRATION 2: Reception Products =====
+ALTER TABLE reception_products 
+  ADD COLUMN IF NOT EXISTS invoice_image_url TEXT;
+
+
+===== MIGRATION 3: Purchase Commands Validation =====
+ALTER TABLE purchase_commands 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+
+===== MIGRATION 4: Bons Commandes Validation =====
+ALTER TABLE bons_commandes 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+-- ============================================================================
+-- PROJECT EXPENSES TABLE SCHEMA - ALTER EXISTING TABLE
+-- ============================================================================
+-- This modifies the existing project_expenses table to add missing columns
+-- for better project and user tracking
+
+-- Add missing columns to existing project_expenses table if they don't exist
+ALTER TABLE project_expenses
+ADD COLUMN IF NOT EXISTS created_by_id UUID,
+ADD COLUMN IF NOT EXISTS chef_de_projet_id UUID,
+ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'autre',
+ADD COLUMN IF NOT EXISTS notes TEXT,
+ADD COLUMN IF NOT EXISTS amount DECIMAL(12, 2);
+
+-- Add foreign key constraints for user references (if they don't already exist)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_created_by_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_created_by_id_fkey 
+      FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_chef_de_projet_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_chef_de_projet_id_fkey 
+      FOREIGN KEY (chef_de_projet_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Create indexes for better query performance (if not already present)
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_box_id 
+  ON project_expenses(project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_created_by_id 
+  ON project_expenses(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_chef_de_projet_id 
+  ON project_expenses(chef_de_projet_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_expense_date 
+  ON project_expenses(expense_date);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_category 
+  ON project_expenses(category);
+
+-- Create or replace trigger to automatically update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_project_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop existing trigger if it exists, then create new one
+DROP TRIGGER IF EXISTS project_expenses_update_timestamp ON project_expenses;
+CREATE TRIGGER project_expenses_update_timestamp
+  BEFORE UPDATE ON project_expenses
+  FOR EACH ROW
+  EXECUTE FUNCTION update_project_expenses_timestamp();
+
+-- ============================================================================
+-- OPTIONAL: VIEWS FOR COMMON QUERIES
+-- ============================================================================
+
+-- View to get total expenses by project
+CREATE OR REPLACE VIEW project_expenses_summary AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  COUNT(pe.id) as expense_count,
+  SUM(pe.amount) as total_amount,
+  AVG(pe.amount) as average_expense,
+  MAX(pe.expense_date) as last_expense_date
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+GROUP BY pb.id, pb.name;
+
+-- View to get expenses by category per project
+CREATE OR REPLACE VIEW project_expenses_by_category AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  pe.category,
+  COUNT(pe.id) as count,
+  SUM(pe.amount) as total_amount
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+WHERE pe.category IS NOT NULL
+GROUP BY pb.id, pb.name, pe.category;
+
+-- ============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES - OPTIONAL
+-- ============================================================================
+-- Uncomment the following if you want to enable RLS for project_expenses
+
+-- Enable RLS on project_expenses table
+-- ALTER TABLE project_expenses ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can view expenses for their own projects
+-- CREATE POLICY project_expenses_view_own
+--   ON project_expenses FOR SELECT
+--   USING (
+--     created_by_id = auth.uid() 
+--     OR chef_de_projet_id = auth.uid()
+--     OR EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can insert expenses for their projects
+-- CREATE POLICY project_expenses_insert_own
+--   ON project_expenses FOR INSERT
+--   WITH CHECK (
+--     created_by_id = auth.uid()
+--     AND EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can update expenses they created
+-- CREATE POLICY project_expenses_update_own
+--   ON project_expenses FOR UPDATE
+--   USING (created_by_id = auth.uid())
+--   WITH CHECK (created_by_id = auth.uid());
+
+-- Policy: Users can delete expenses they created
+-- CREATE POLICY project_expenses_delete_own
+--   ON project_expenses FOR DELETE
+--   USING (created_by_id = auth.uid());
+
+-- ============================================================================
+-- SAMPLE QUERIES FOR REFERENCE
+-- ============================================================================
+
+-- Get all expenses for a specific project
+-- SELECT * FROM project_expenses 
+-- WHERE project_box_id = 'PROJECT_ID_HERE'
+-- ORDER BY expense_date DESC;
+
+-- Get total expenses by project
+-- SELECT * FROM project_expenses_summary
+-- ORDER BY total_amount DESC;
+
+-- Get expenses by category for a project
+-- SELECT * FROM project_expenses_by_category
+-- WHERE project_id = 'PROJECT_ID_HERE'
+-- ORDER BY total_amount DESC;
+
+-- Get chef_de_projet expenses within date range
+-- SELECT * FROM project_expenses
+-- WHERE chef_de_projet_id = 'USER_ID_HERE'
+-- AND expense_date BETWEEN '2024-01-01' AND '2024-12-31'
+-- ORDER BY expense_date DESC;
+-- ============================================================================
+-- ADD_ADMIN_VALIDATION_TO_PAYMENT_ORDERS.sql
+-- ============================================================================
+-- PURPOSE: Add two-step validation for payment orders
+--   Step 1: Comptable validates (existing functionality)
+--   Step 2: General Administration validates (new)
+-- ============================================================================
+
+-- STEP 1: ADD ADMIN VALIDATION FIELDS
+-- ============================================================================
+-- Add columns to track administration validation
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT false;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_at TIMESTAMP WITH TIME ZONE;
+
+-- ============================================================================
+-- STEP 2: UPDATE STATUS CONSTRAINT (Optional - for enhanced tracking)
+-- ============================================================================
+-- Current status: pending, validated
+-- After this change:
+--   pending = not validated by comptable
+--   validated = validated by comptable only
+--   finalized = validated by both comptable and administration
+
+-- NOTE: This comment documents the new workflow
+-- Do NOT execute the ALTER TABLE below if you want to keep existing status values
+-- Instead, use the boolean flags (admin_validated) to track admin approval
+
+-- If you want to add 'finalized' status, uncomment and run:
+-- ALTER TABLE public.payment_orders 
+-- DROP CONSTRAINT IF EXISTS payment_orders_status_check;
+
+-- ALTER TABLE public.payment_orders 
+-- ADD CONSTRAINT payment_orders_status_check 
+-- CHECK (status IN ('pending', 'validated', 'finalized'));
+
+-- ============================================================================
+-- STEP 3: CREATE INDEX FOR ADMIN VALIDATION QUERIES
+-- ============================================================================
+-- Improves performance for filtering orders by admin validation status
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated 
+ON public.payment_orders(admin_validated);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated_by 
+ON public.payment_orders(admin_validated_by);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_validation_status 
+ON public.payment_orders(status, admin_validated);
+
+-- ============================================================================
+-- STEP 4: VIEW - ORDERS AWAITING ADMIN VALIDATION
+-- ============================================================================
+-- Useful for administration dashboard - shows orders validated by comptable
+-- but not yet by administration
+
+CREATE OR REPLACE VIEW orders_awaiting_admin_validation AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.status,
+  po.admin_validated,
+  bc.bon_id,
+  bc.total_price as bon_total_price,
+  po.created_at,
+  po.updated_at,
+  CASE 
+    WHEN po.status = 'validated' AND po.admin_validated = false THEN 'Awaiting Admin Approval'
+    WHEN po.admin_validated = true THEN 'Admin Approved'
+    ELSE 'Not Yet Comptable Approved'
+  END as validation_stage
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'validated' AND po.admin_validated = false
+ORDER BY po.created_at ASC;
+
+-- ============================================================================
+-- STEP 5: VERIFICATION QUERIES
+-- ============================================================================
+
+-- Check if columns were added successfully
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'payment_orders'
+AND column_name IN ('admin_validated', 'admin_validated_by', 'admin_validated_at')
+ORDER BY column_name;
+
+-- Check if indexes were created
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'payment_orders'
+AND indexname LIKE '%admin%'
+ORDER BY indexname;
+
+-- Check if view was created
+SELECT table_name FROM information_schema.tables
+WHERE table_type = 'VIEW' AND table_name = 'orders_awaiting_admin_validation';
+
+-- ============================================================================
+-- STEP 6: SAMPLE DATA UPDATES (Optional - for testing)
+-- ============================================================================
+-- If you have existing validated orders, you can mark some for admin validation
+-- Uncomment to use:
+
+-- Mark first order as awaiting admin validation:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = false
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- Mark one order as admin validated:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = true, 
+--     admin_validated_by = auth.uid(),
+--     admin_validated_at = CURRENT_TIMESTAMP
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- ============================================================================
+-- STEP 7: MIGRATION GUIDE
+-- ============================================================================
+
+-- VALIDATION WORKFLOW:
+-- 
+-- 1. User (Comptable Role):
+--    - Creates payment order (status = 'pending')
+--    - Clicks "Validate" button
+--    - Changes status to 'validated' (admin_validated = false)
+--
+-- 2. Manager (Administration Role):
+--    - Sees orders where status = 'validated' AND admin_validated = false
+--    - Reviews the order
+--    - Clicks "Admin Validate" button
+--    - Sets admin_validated = true, admin_validated_by = current_user, admin_validated_at = now
+--
+-- STATUSES:
+-- - pending: Created but not comptable validated
+-- - validated: Comptable validated, awaiting admin validation
+-- - finalized: Both comptable and admin validated (optional - use admin_validated boolean)
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL:
+--
+-- ✅ Columns added: admin_validated, admin_validated_by, admin_validated_at
+-- ✅ Indexes created for performance
+-- ✅ View created for admin dashboard
+-- ✅ Verification queries show correct output
+--
+-- Then update React component:
+-- ✅ Show "Comptable Validate" button if status = 'pending' AND user.role = 'comptable'
+-- ✅ Show "Admin Validate" button if status = 'validated' AND admin_validated = false AND user.role = 'admin'
+-- ✅ Show checkmark/approved badge if admin_validated = true
+
+-- ============================================================================
+-- SQL: Add Barcode Support to Products Table
+-- Purpose: Enable barcode scanning in Bons de Commande interface
+
+-- 1. Add barcode column to products table
+ALTER TABLE public.products ADD COLUMN barcode VARCHAR(255) UNIQUE;
+ALTER TABLE public.products ADD COLUMN barcode_type VARCHAR(50); -- e.g., 'EAN-13', 'UPC', 'QR'
+
+-- 2. Create index for faster barcode lookups
+CREATE INDEX idx_products_barcode ON public.products(barcode);
+
+-- 3. Add barcode column to bons_commandes_products table (optional, for local storage)
+ALTER TABLE public.bons_commandes_products ADD COLUMN barcode VARCHAR(255);
+
+-- 4. Create index for products_barcode_type
+CREATE INDEX idx_products_barcode_type ON public.products(barcode_type);
+
+-- 5. Add RLS policy for barcode scanning (if using RLS)
+-- Allow authenticated users to read products by barcode
+CREATE POLICY "Users can read products by barcode" ON public.products
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+-- Sample data insertion (optional - for testing)
+-- INSERT INTO public.products (name, barcode, barcode_type, unit_price)
+-- VALUES 
+--   ('Product A', '5901234123457', 'EAN-13', 100.00),
+--   ('Product B', '123456789012', 'UPC', 50.00),
+--   ('Product C', 'QR20240405001', 'QR', 75.00);
+
+-- Verification queries
+-- Check if barcode column exists:
+-- SELECT column_name FROM information_schema.columns 
+-- WHERE table_name='products' AND column_name='barcode';
+
+-- View products with barcodes:
+-- SELECT id, name, barcode, barcode_type, unit_price FROM public.products WHERE barcode IS NOT NULL;
+-- SQL Migration: Add Logo Support to Users Table
+-- This migration adds columns to store logo URLs for user profiles and enterprise settings
+
+-- 1. Add logo_url column to users table
+ALTER TABLE public.users
+ADD COLUMN logo_url character varying;
+
+-- 2. Create an enterprise_settings table if it doesn't exist
+CREATE TABLE IF NOT EXISTS public.enterprise_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  logo_url character varying,
+  company_name character varying NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by_id uuid,
+  CONSTRAINT enterprise_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT enterprise_settings_created_by_id_fkey FOREIGN KEY (created_by_id) REFERENCES auth.users(id)
+);
+
+-- 3. Create a storage bucket policy for logos if needed (run in Supabase dashboard)
+-- This creates a public bucket for logos
+/*
+INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true);
+
+CREATE POLICY "Allow public read access to logos" ON storage.objects
+  FOR SELECT USING (bucket_id = 'logos');
+
+CREATE POLICY "Allow authenticated users to upload logos" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to update their own logos" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to delete their own logos" ON storage.objects
+  FOR DELETE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+*/
+
+-- 4. Add indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_users_logo_url ON public.users(logo_url);
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by ON public.enterprise_settings(created_by_id);
+
+-- 5. Add RLS policies for enterprise_settings table
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow admin users to manage enterprise settings" ON public.enterprise_settings
+  FOR ALL USING (
+    auth.uid() = created_by_id OR 
+    EXISTS (
+      SELECT 1 FROM public.users 
+      WHERE id = auth.uid() AND role = 'admin'
+    )
+  );
+
+CREATE POLICY "Allow all authenticated users to view enterprise settings" ON public.enterprise_settings
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+-- 6. Add trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_enterprise_settings_updated_at
+  BEFORE UPDATE ON public.enterprise_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- Notes:
+-- 1. Logo images will be stored in Supabase Storage bucket 'logos'
+-- 2. The logo_url will be the public URL returned by Supabase Storage
+-- 3. Max file size is recommended to be 5MB per logo
+-- 4. Supported formats: JPG, PNG, WebP, GIF
 -- ============================================================================
 -- SQL SCHEMA FOR RENDEZ-VOUS (APPOINTMENTS) & ORDRES DE PAIEMENT (PAYMENT ORDERS)
 -- ============================================================================

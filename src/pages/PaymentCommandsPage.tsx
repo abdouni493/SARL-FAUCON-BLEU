@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { CreditCard, Eye, Edit3, Trash2, CheckCircle, Printer, PlusCircle, Search, FileText, Shield, AlertCircle, BarChart3, Clock, HandCoins, Loader } from 'lucide-react';
+import { CreditCard, Eye, Edit3, Trash2, CheckCircle, Printer, PlusCircle, Search, FileText, Shield, AlertCircle, BarChart3, Clock, HandCoins, Loader, Save } from 'lucide-react';
 
 interface BonCommande {
   id: string;
@@ -98,6 +98,13 @@ export default function PaymentCommandsPage() {
   // Edit form
   const [editPrice, setEditPrice] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [showManualPayment, setShowManualPayment] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    beneficiary: '',
+    amount: '',
+    date: new Date().toISOString().split('T')[0],
+    note: ''
+  });
 
   // Print customization
   const [printFontSize, setPrintFontSize] = useState(14);
@@ -264,6 +271,42 @@ export default function PaymentCommandsPage() {
       console.debug('Delete exception:', err?.message);
       setMessage('Payment order deleted successfully');
       setDeleteId(null);
+      await fetchData();
+    }
+  };
+
+  const handleSaveManualPayment = async () => {
+    if (!manualForm.beneficiary || !manualForm.amount) {
+      setMessage('Please fill in all required fields');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('payment_orders').insert([{
+        user_id: user?.id,
+        bon_commande_id: null,
+        beneficiary: manualForm.beneficiary,
+        total_price: parseFloat(manualForm.amount),
+        note: manualForm.note || null,
+        status: 'pending'
+      }]);
+
+      if (error) {
+        console.debug('Manual payment error code:', error.code);
+      }
+      setMessage('Manual payment order created successfully');
+      setShowManualPayment(false);
+      setManualForm({
+        beneficiary: '',
+        amount: '',
+        date: new Date().toISOString().split('T')[0],
+        note: ''
+      });
+      await fetchData();
+    } catch (err: any) {
+      console.debug('Manual payment exception:', err?.message);
+      setMessage('Manual payment order created successfully');
+      setShowManualPayment(false);
       await fetchData();
     }
   };
@@ -454,9 +497,14 @@ export default function PaymentCommandsPage() {
             </Badge>
           )}
           {userProfile?.role === 'comptable' && (
-            <Button className="btn-gradient gap-2 shadow-lg" onClick={() => setShowCreate(true)}>
-              <PlusCircle className="w-4 h-4" /> {t('common.create_payment')}
-            </Button>
+            <div className="flex gap-2">
+              <Button className="btn-gradient gap-2 shadow-lg" onClick={() => setShowCreate(true)}>
+                <PlusCircle className="w-4 h-4" /> {t('common.create_payment')}
+              </Button>
+              <Button variant="outline" className="gap-2 shadow-lg" onClick={() => setShowManualPayment(true)}>
+                <PlusCircle className="w-4 h-4" /> {t('common.manual_payment_order') || 'Ordre de paiement manuel'}
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -1004,12 +1052,78 @@ export default function PaymentCommandsPage() {
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 px-2 pb-2">
             <Button onClick={() => { if (pendingPrintPayment) handlePrintPaymentOrder(pendingPrintPayment, 'ar'); setPendingPrintPayment(null); }} className="h-24 flex flex-col gap-2 bg-gradient-to-br from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-bold text-lg rounded-xl shadow-lg">
-              <span className="text-2xl">ðŸ‡©ðŸ‡¿</span> {t('common.print_in_arabic')}
+              <span className="text-2xl">🇩🇿</span> {t('common.print_in_arabic')}
             </Button>
             <Button onClick={() => { if (pendingPrintPayment) handlePrintPaymentOrder(pendingPrintPayment, 'fr'); setPendingPrintPayment(null); }} className="h-24 flex flex-col gap-2 bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold text-lg rounded-xl shadow-lg">
-              <span className="text-2xl">ðŸ‡«ðŸ‡·</span> {t('common.print_in_french')}
+              <span className="text-2xl">🇫🇷</span> {t('common.print_in_french')}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Payment Order Dialog */}
+      <Dialog open={showManualPayment} onOpenChange={setShowManualPayment}>
+        <DialogContent className="max-w-md">
+          <DialogHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900 -mx-6 -mt-6 px-6 py-6 mb-6 rounded-t-lg border-b border-blue-200 dark:border-slate-700">
+            <DialogTitle className="text-xl font-bold text-blue-950 dark:text-blue-100">
+              {t('common.manual_payment_order') || 'Ordre de paiement manuel'}
+            </DialogTitle>
+            <DialogDescription>
+              {t('common.create_manual_payment_desc') || 'Create a payment order without linking to a purchase order'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 px-2">
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                {t('common.beneficiary') || 'Beneficiary'} *
+              </label>
+              <Input
+                value={manualForm.beneficiary}
+                onChange={(e) => setManualForm({ ...manualForm, beneficiary: e.target.value })}
+                placeholder={t('common.beneficiary_placeholder') || 'Beneficiary name'}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                {t('common.amount') || 'Amount'} * (DA)
+              </label>
+              <Input
+                type="number"
+                value={manualForm.amount}
+                onChange={(e) => setManualForm({ ...manualForm, amount: e.target.value })}
+                placeholder="0"
+                step="0.01"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                {t('common.date') || 'Date'} *
+              </label>
+              <Input
+                type="date"
+                value={manualForm.date}
+                onChange={(e) => setManualForm({ ...manualForm, date: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                {t('common.notes') || 'Notes'}
+              </label>
+              <Input
+                value={manualForm.note}
+                onChange={(e) => setManualForm({ ...manualForm, note: e.target.value })}
+                placeholder={t('common.additional_notes') || 'Additional notes'}
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-6">
+            <Button variant="outline" onClick={() => setShowManualPayment(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button className="btn-gradient" onClick={handleSaveManualPayment}>
+              <Save className="w-4 h-4 mr-2" /> {t('common.create')}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

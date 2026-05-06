@@ -70,6 +70,26 @@ export default function StorageManagementPage() {
   const [newCat, setNewCat] = useState('');
   const [newUnity, setNewUnity] = useState('');
 
+  // Helper function to get localized "Add Material" label
+  const getAddMaterialLabel = () => {
+    if (i18n.language === 'ar') {
+      return 'إضافة مادة';
+    } else if (i18n.language === 'fr') {
+      return 'Ajouter Matière';
+    }
+    return t('common.create_product');
+  };
+
+  // Helper function to get localized "Edit Material" label
+  const getEditMaterialLabel = () => {
+    if (i18n.language === 'ar') {
+      return 'تعديل مادة';
+    } else if (i18n.language === 'fr') {
+      return 'Modifier Matière';
+    }
+    return t('common.edit_product');
+  };
+
   const [formData, setFormData] = useState({
     name: '',
     category_id: '',
@@ -311,7 +331,7 @@ export default function StorageManagementPage() {
           <p className="text-muted-foreground text-sm mt-1">{t('storage.manage_inventory')}</p>
         </div>
         <Button onClick={() => setShowCreateDialog(true)} className="gap-2 btn-gradient text-white shadow-lg font-semibold">
-          <Plus className="w-5 h-5" /> {t('common.create_product')}
+          <Plus className="w-5 h-5" /> {getAddMaterialLabel()}
         </Button>
       </div>
 
@@ -472,7 +492,7 @@ export default function StorageManagementPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900 -mx-6 -mt-6 px-6 py-6 mb-6 rounded-t-lg border-b border-blue-200 dark:border-slate-700">
             <DialogTitle className="text-2xl font-bold text-blue-950 dark:text-blue-100">
-              {editingId ? t('common.edit_product') : t('common.create_product')}
+              {editingId ? getEditMaterialLabel() : getAddMaterialLabel()}
             </DialogTitle>
             <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">{t('storage.add_manage_products')}</p>
           </DialogHeader>

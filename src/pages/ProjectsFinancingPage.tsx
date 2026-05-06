@@ -226,7 +226,7 @@ export default function ProjectsFinancingPage() {
             className="bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
-            {t('project_financing.new_versement') || 'Nouveau Versement'}
+            {t('project_financing.new_versement') || 'Nouveau Financement'}
           </Button>
         </div>
 
@@ -301,10 +301,10 @@ export default function ProjectsFinancingPage() {
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-700 dark:to-slate-800 px-6 py-5 border-b border-blue-100 dark:border-slate-600 sticky top-0 z-10">
             <div className="space-y-1">
               <DialogTitle className="text-2xl font-bold text-slate-900 dark:text-white">
-                {t('project_financing.new_versement') || 'Nouveau Versement'}
+                {t('project_financing.new_versement') || 'Nouveau Financement'}
               </DialogTitle>
               <DialogDescription className="text-slate-600 dark:text-slate-400">
-                {isRtl ? 'إنشاء تحويل مالي جديد لمشروع' : 'Créer un nouveau versement pour un projet'}
+                {isRtl ? 'إنشاء تمويل جديد لمشروع' : 'Créer un nouveau financement pour un projet'}
               </DialogDescription>
             </div>
           </div>

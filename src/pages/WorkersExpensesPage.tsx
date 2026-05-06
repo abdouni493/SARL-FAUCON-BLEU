@@ -19,6 +19,13 @@ interface WorkerExpense {
   expense_date: string;
   notes: string;
   created_at: string;
+  project_id?: string;
+  project_name?: string;
+}
+
+interface Project {
+  id: string;
+  name: string;
 }
 
 const CATEGORIES = ['Salaire', 'Prime', 'Transport', 'Allocations', 'Bonus', 'Autres'];
@@ -29,6 +36,7 @@ export default function WorkersExpensesPage() {
   const { enterpriseSettings } = useData();
   const isRtl = i18n.language === 'ar';
   const [expenses, setExpenses] = useState<WorkerExpense[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -40,8 +48,24 @@ export default function WorkersExpensesPage() {
     category: 'Salaire',
     amount: '',
     expense_date: new Date().toISOString().split('T')[0],
-    notes: ''
+    notes: '',
+    project_id: ''
   });
+
+  // Fetch projects from database
+  const fetchProjects = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('project_boxes')
+        .select('id, name')
+        .order('name');
+
+      if (error) throw error;
+      setProjects(data || []);
+    } catch (err: any) {
+      console.error('Error fetching projects:', err);
+    }
+  };
 
   // Fetch expenses from database
   const fetchExpenses = async () => {
@@ -49,11 +73,20 @@ export default function WorkersExpensesPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from('worker_expenses')
-        .select('*')
+        .select(`
+          *,
+          project_boxes(name)
+        `)
         .order('expense_date', { ascending: false });
 
       if (error) throw error;
-      setExpenses(data || []);
+      
+      const enrichedExpenses = (data || []).map((exp: any) => ({
+        ...exp,
+        project_name: exp.project_boxes?.name || null
+      }));
+      
+      setExpenses(enrichedExpenses);
     } catch (err: any) {
       console.error('Error fetching expenses:', err);
       setMessage(err.message || 'Failed to fetch expenses');
@@ -64,6 +97,7 @@ export default function WorkersExpensesPage() {
 
   useEffect(() => {
     fetchExpenses();
+    fetchProjects();
   }, []);
 
   const handleSave = async () => {
@@ -79,7 +113,8 @@ export default function WorkersExpensesPage() {
         category: form.category,
         amount: parseFloat(form.amount),
         expense_date: form.expense_date,
-        notes: form.notes
+        notes: form.notes,
+        project_id: form.project_id || null
       };
 
       if (editId) {
@@ -107,7 +142,8 @@ export default function WorkersExpensesPage() {
         category: 'Salaire',
         amount: '',
         expense_date: new Date().toISOString().split('T')[0],
-        notes: ''
+        notes: '',
+        project_id: ''
       });
 
       setTimeout(() => setMessage(''), 3000);
@@ -139,7 +175,8 @@ export default function WorkersExpensesPage() {
       category: 'Salaire',
       amount: '',
       expense_date: new Date().toISOString().split('T')[0],
-      notes: ''
+      notes: '',
+      project_id: ''
     });
     setEditId(null);
     setShowForm(true);
@@ -168,6 +205,7 @@ export default function WorkersExpensesPage() {
         <div class="detail-item"><h3>${L.category}</h3><p>${expense.category}</p></div>
         <div class="detail-item"><h3>${L.date}</h3><p>${formatDateLocale(expense.expense_date, lang)}</p></div>
         <div class="detail-item"><h3>${L.amount}</h3><p>${expense.amount.toLocaleString()} DA</p></div>
+        ${expense.project_name ? `<div class="detail-item"><h3>${L.project || 'Project'}</h3><p>${expense.project_name}</p></div>` : ''}
       </div>
       ${expense.notes ? `<div style="padding:15px;background:#f9fafb;border-radius:8px;margin-bottom:15px;"><strong>${L.notes}:</strong><br>${expense.notes}</div>` : ''}`;
     openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة نفقة عامل', fr: 'Document Dépense Travailleur' }, enterpriseSettings }, body));
@@ -248,6 +286,11 @@ export default function WorkersExpensesPage() {
                     <p className="text-xs text-gray-600 mb-1">
                       <strong>Date:</strong> {new Date(expense.expense_date).toLocaleDateString('fr-FR')}
                     </p>
+                    {expense.project_name && (
+                      <p className="text-xs text-gray-600 mb-1">
+                        <strong>{t('common.project') || 'Project'}:</strong> {expense.project_name}
+                      </p>
+                    )}
                     {expense.notes && (
                       <p className="text-xs text-gray-500 line-clamp-2">{expense.notes}</p>
                     )}
@@ -357,6 +400,20 @@ export default function WorkersExpensesPage() {
                   >
                     {CATEGORIES.map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-foreground block mb-2">{t('common.project') || 'Project'}</label>
+                  <select
+                    value={form.project_id}
+                    onChange={e => setForm({ ...form, project_id: e.target.value })}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-slate-200 dark:border-slate-700 bg-background focus:border-blue-500"
+                  >
+                    <option value="">{t('common.select_project') || 'Select a project'}</option>
+                    {projects.map(project => (
+                      <option key={project.id} value={project.id}>{project.name}</option>
                     ))}
                   </select>
                 </div>

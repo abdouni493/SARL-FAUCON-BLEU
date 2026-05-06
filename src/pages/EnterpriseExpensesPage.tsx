@@ -38,6 +38,12 @@ const CATEGORIES = [
   'Communication',
   'Assurances',
   'Maintenance',
+  'CNAS',
+  'CACOBATPH',
+  'Taxes / Impôts',
+  'Bureau',
+  'Logement / Sakan',
+  'Location',
   'Autres'
 ];
 
@@ -53,6 +59,8 @@ export default function EnterpriseExpensesPage() {
   const [message, setMessage] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [pendingPrintExpense, setPendingPrintExpense] = useState<EnterpriseExpense | null>(null);
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -205,11 +213,47 @@ export default function EnterpriseExpensesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{t('nav.enterprise_expenses')}</h1>
+          <h1 className="text-2xl font-bold text-foreground">{t('nav.administration_expenses')}</h1>
           <p className="text-sm text-muted-foreground mt-1">{t('common.manage')} {expenses.length} {t('common.items')}</p>
         </div>
         <Button onClick={openCreate} className="btn-gradient gap-2">
           <Plus className="w-4 h-4" /> {t('common.create')}
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+        <div className="flex-1">
+          <label className="text-sm font-semibold text-foreground block mb-2">{t('common.month') || 'Month'}</label>
+          <Input
+            type="month"
+            value={filterMonth}
+            onChange={e => setFilterMonth(e.target.value)}
+            className="px-4 py-2 border-2 border-slate-200 dark:border-slate-700 rounded-lg focus:border-blue-500"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="text-sm font-semibold text-foreground block mb-2">{t('common.category') || 'Category'}</label>
+          <select
+            value={filterCategory}
+            onChange={e => setFilterCategory(e.target.value)}
+            className="w-full px-4 py-2 rounded-lg border-2 border-slate-200 dark:border-slate-700 bg-background focus:border-blue-500"
+          >
+            <option value="">{t('common.all_categories') || 'All Categories'}</option>
+            {CATEGORIES.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => {
+            setFilterMonth('');
+            setFilterCategory('');
+          }}
+          className="text-sm"
+        >
+          {t('common.clear') || 'Clear'}
         </Button>
       </div>
 
@@ -248,7 +292,12 @@ export default function EnterpriseExpensesPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {expenses.map((expense, idx) => (
+          {expenses.filter(expense => {
+            const expenseMonth = expense.expense_date.substring(0, 7);
+            const matchesMonth = !filterMonth || expenseMonth === filterMonth;
+            const matchesCategory = !filterCategory || expense.category === filterCategory;
+            return matchesMonth && matchesCategory;
+          }).map((expense, idx) => (
             <motion.div
               key={expense.id}
               initial={{ opacity: 0, y: 20 }}

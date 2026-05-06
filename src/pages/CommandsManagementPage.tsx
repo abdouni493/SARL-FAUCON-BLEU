@@ -70,6 +70,8 @@ export default function CommandsManagementPage() {
   const [loading, setLoading] = useState(true);
   const [convertMessage, setConvertMessage] = useState('');
   const [pendingPrintCmd, setPendingPrintCmd] = useState<SupabaseCommand | null>(null);
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
 
   useEffect(() => {
     fetchCommandsFromDatabase();
@@ -352,13 +354,76 @@ export default function CommandsManagementPage() {
         </div>
       </motion.div>
 
+      {/* Filters */}
+      {supabaseCommands.length > 0 && (
+        <div className="flex gap-3 items-end flex-col md:flex-row">
+          <input
+            type="month"
+            value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg dark:bg-slate-800 dark:border-slate-600"
+            title={i18n.language === 'ar' ? 'تصفية حسب الشهر' : 'Filtrer par mois'}
+          />
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg dark:bg-slate-800 dark:border-slate-600"
+          >
+            <option value="all">{i18n.language === 'ar' ? 'جميع الحالات' : 'Tous les statuts'}</option>
+            <option value="pending">{i18n.language === 'ar' ? 'قيد الانتظار' : 'En attente'}</option>
+            <option value="validated">{i18n.language === 'ar' ? 'مؤكد' : 'Validé'}</option>
+            <option value="purchase">{i18n.language === 'ar' ? 'شراء' : 'Achat'}</option>
+            <option value="bon_commande">{i18n.language === 'ar' ? 'أمر شراء' : 'Bon de Commande'}</option>
+            <option value="payment">{i18n.language === 'ar' ? 'دفع' : 'Paiement'}</option>
+            <option value="finalized">{i18n.language === 'ar' ? 'منته' : 'Finalisé'}</option>
+          </select>
+          {(filterMonth || filterStatus !== 'all') && (
+            <Button
+              onClick={() => {
+                setFilterMonth('');
+                setFilterStatus('all');
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {i18n.language === 'ar' ? 'مسح' : 'Effacer'}
+            </Button>
+          )}
+        </div>
+      )}
+
       {supabaseCommands.length === 0 ? (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="erp-card text-center py-12 text-muted-foreground">
           {t('common.no_data')}
         </motion.div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {supabaseCommands.map((cmd, i) => (
+          {(() => {
+            const filteredCommands = supabaseCommands.filter(cmd => {
+              // Filter by month
+              let matchesMonth = true;
+              if (filterMonth) {
+                const cmdMonth = cmd.created_at.substring(0, 7); // YYYY-MM
+                matchesMonth = cmdMonth === filterMonth;
+              }
+
+              // Filter by status
+              let matchesStatus = true;
+              if (filterStatus !== 'all') {
+                matchesStatus = cmd.status === filterStatus;
+              }
+
+              return matchesMonth && matchesStatus;
+            });
+
+            if (filteredCommands.length === 0) {
+              return (
+                <div className="col-span-full text-center py-12 text-muted-foreground">
+                  {i18n.language === 'ar' ? 'لا توجد نتائج' : 'Aucun résultat'}
+                </div>
+              );
+            }
+
+            return filteredCommands.map((cmd, i) => (
             <motion.div 
               key={cmd.id} 
               initial={{ opacity: 0, y: 20 }} 
@@ -426,7 +491,8 @@ export default function CommandsManagementPage() {
                 </div>
               </div>
             </motion.div>
-          ))}
+            ));
+          })()}
         </div>
       )}
 

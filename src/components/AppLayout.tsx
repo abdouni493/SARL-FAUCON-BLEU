@@ -61,7 +61,7 @@ const menusByRole: Record<UserRole, MenuItem[]> = {
     { label: 'nav.project_financing', icon: CreditCard, path: '/projects-financing' },
     { label: 'nav.workers_management', icon: Users, path: '/workers-management' },
     { label: 'nav.workers_expenses', icon: Receipt, path: '/workers-expenses' },
-    { label: 'nav.enterprise_expenses', icon: Receipt, path: '/enterprise-expenses' },
+    { label: 'nav.administration_expenses', icon: Receipt, path: '/enterprise-expenses' },
     { label: 'nav.material_commands', icon: Package, path: '/material-commands' },
     { label: 'nav.purchase_commands', icon: ShoppingCart, path: '/purchase-commands' },
     { label: 'nav.bons_commandes', icon: FileText, path: '/bons-commandes' },

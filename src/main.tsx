@@ -2,134 +2,119 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
 
-// ============================================================================
-// CONSOLE MESSAGE SUPPRESSION
-// ============================================================================
-// Suppress console messages from external libraries that clutter the console
-// This improves UX by hiding non-critical warnings while keeping relevant errors
-
 const originalWarn = console.warn;
 const originalLog = console.log;
 const originalError = console.error;
 
-// Comprehensive list of patterns to suppress from external libraries
 const suppressPatterns = [
-  // React Router v7 deprecation warnings
   'React Router Future Flag Warning',
   'v7_startTransition',
   'v7_relativeSplatPath',
   'defaultErrorElement',
-  
-  // React DevTools promotional message
   'React DevTools',
   'reactjs.org/link/react-devtools',
-  
-  // i18next/Locize promotional messages
   'i18next is made possible',
   'Locize',
   'locize.com',
   'managed localization',
-  
-  // Supabase 403 errors and network logs
-  '403',
   'Forbidden',
   '@supabase',
   'supabase-js',
   'vcelsivddzkopucoouwi.supabase.co',
+  'drvngvfijnvyazxqebto.supabase.co',
   'permission denied',
   'row-level security',
   'row level security',
   'RLS',
-  
-  // Specific Supabase error messages
   'GET https://vcelsivddzkopucoouwi.supabase.co',
   'POST https://vcelsivddzkopucoouwi.supabase.co',
   'PUT https://vcelsivddzkopucoouwi.supabase.co',
   'DELETE https://vcelsivddzkopucoouwi.supabase.co',
   'PATCH https://vcelsivddzkopucoouwi.supabase.co',
-  
-  // Network error patterns
-  'XMLHttpRequest',
+  'GET https://drvngvfijnvyazxqebto.supabase.co',
+  'POST https://drvngvfijnvyazxqebto.supabase.co',
+  'PUT https://drvngvfijnvyazxqebto.supabase.co',
+  'DELETE https://drvngvfijnvyazxqebto.supabase.co',
+  'PATCH https://drvngvfijnvyazxqebto.supabase.co',
+  '/auth/v1/token',
   'net::ERR_CONNECTION_REFUSED',
-  
-  // WebSocket connection errors
   'WebSocket connection',
   'wss://',
-  'failed:',
   'transportConnect',
-  
-  // JWT and authentication errors
   'JWT expired',
   'Token expired',
   'jwt',
-  '401',
   'Unauthorized',
 ];
 
 const shouldSuppress = (message: string): boolean => {
   if (!message || typeof message !== 'string') return false;
   const lowerMessage = message.toLowerCase();
-  return suppressPatterns.some(pattern => 
+  return suppressPatterns.some(pattern =>
     lowerMessage.includes(pattern.toLowerCase())
   );
 };
 
 console.warn = (...args: any[]) => {
   const message = args.map(arg => String(arg)).join(' ');
-  if (!shouldSuppress(message)) {
-    originalWarn(...args);
-  }
+  if (!shouldSuppress(message)) originalWarn(...args);
 };
 
 console.log = (...args: any[]) => {
   const message = args.map(arg => String(arg)).join(' ');
-  if (!shouldSuppress(message)) {
-    originalLog(...args);
-  }
+  if (!shouldSuppress(message)) originalLog(...args);
 };
 
 console.error = (...args: any[]) => {
   const message = args.map(arg => String(arg)).join(' ');
-  if (!shouldSuppress(message)) {
-    originalError(...args);
-  }
+  if (!shouldSuppress(message)) originalError(...args);
 };
 
-// ============================================================================
-// NETWORK ERROR SUPPRESSION
-// ============================================================================
-// Intercept fetch responses to suppress Supabase permission errors
-// without hiding legitimate application errors
+const originalGroup = console.group;
+const originalGroupCollapsed = console.groupCollapsed;
 
+console.group = function (...args: any[]) {
+  const message = args.map(arg => String(arg)).join(' ');
+  if (!shouldSuppress(message)) originalGroup.apply(console, args);
+};
+
+console.groupCollapsed = function (...args: any[]) {
+  const message = args.map(arg => String(arg)).join(' ');
+  if (!shouldSuppress(message)) originalGroupCollapsed.apply(console, args);
+};
+
+// Intercept fetch to handle Supabase auth failures gracefully
 const originalFetch = window.fetch;
-window.fetch = function(...args: any[]) {
+window.fetch = function (...args: Parameters<typeof fetch>) {
+  const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
+  const isSupabaseCall = url.includes('supabase.co');
+  const isAuthEndpoint = url.includes('/auth/v1/token');
+
   return originalFetch.apply(this, args)
     .then((response) => {
-      // Log 403 errors as debug (not visible) to reduce console noise
-      if (response.status === 403) {
-        const url = String(args[0]);
-        if (url.includes('supabase.co')) {
-          console.debug('Supabase 403 Response (RLS):', url);
-          // Return the response as-is; Supabase client will handle it
-          return response;
-        }
+      // If /auth/v1/token returns 5xx, convert to 503 so Supabase treats it as unavailable
+      if (isAuthEndpoint && response.status >= 500) {
+        return new Response(JSON.stringify({ error: 'Service unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
-      return response;
+      return response; // pass through untouched
     })
-    .catch((error) => {
-      // Handle network errors
-      if (error?.message?.includes('403') || error?.message?.includes('Forbidden')) {
-        console.debug('Network error suppressed:', error.message);
-        // Return a failed response object
-        return { 
-          ok: false, 
-          status: 403, 
-          statusText: 'Forbidden',
-          json: async () => ({ error: 'Forbidden' })
-        };
+    .catch((error: Error) => {
+      if (isSupabaseCall) {
+        return new Response(JSON.stringify({ error: 'Service unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
       throw error;
     });
 };
+
+window.addEventListener('unhandledrejection', (event) => {
+  const message = String(event.reason);
+  if (shouldSuppress(message)) event.preventDefault();
+});
 
 createRoot(document.getElementById("root")!).render(<App />);

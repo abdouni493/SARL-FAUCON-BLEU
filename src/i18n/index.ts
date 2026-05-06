@@ -8,6 +8,10 @@ i18n.use(initReactI18next).init({
   lng: 'ar',
   fallbackLng: 'ar',
   interpolation: { escapeValue: false },
+  // Suppress debug logs and other noise
+  debug: false,
+  saveMissing: false,
+  missingKeyHandler: () => {}, // Don't log missing keys
 });
 
 export default i18n;

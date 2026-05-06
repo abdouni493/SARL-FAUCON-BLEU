@@ -52,6 +52,10 @@ const FinanceProjectBoxPage = () => {
   const [financeDescription, setFinanceDescription] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [pendingPrintProject, setPendingPrintProject] = useState<ProjectBox | null>(null);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [appliedStartDate, setAppliedStartDate] = useState('');
+  const [appliedEndDate, setAppliedEndDate] = useState('');
 
   // Create/Edit form
   const [formName, setFormName] = useState('');
@@ -100,8 +104,22 @@ const FinanceProjectBoxPage = () => {
     return `${value.toLocaleString()} DA`;
   };
 
+  const filterVersementsByDate = (versements: ProjectVersement[] | undefined) => {
+    if (!versements) return [];
+    if (!appliedStartDate && !appliedEndDate) return versements;
+    
+    return versements.filter(v => {
+      if (appliedStartDate && v.date < appliedStartDate) return false;
+      if (appliedEndDate && v.date > appliedEndDate) return false;
+      return true;
+    });
+  };
+
   const totalBoxesAmount = projects.reduce((sum, p) => sum + p.total_amount, 0);
-  const totalVersements = projects.reduce((sum, p) => sum + (p.project_versements?.reduce((s, v) => s + v.amount, 0) || 0), 0);
+  const totalVersements = projects.reduce((sum, p) => {
+    const filtered = filterVersementsByDate(p.project_versements);
+    return sum + filtered.reduce((s, v) => s + v.amount, 0);
+  }, 0);
   const totalRemaining = totalBoxesAmount - totalVersements;
 
   const handleAddVersement = async (projectId: string) => {
@@ -341,6 +359,56 @@ ${project.project_versements.map((v, idx) => `<tr><td style="text-align:center;f
         {t('nav.finance_box')}
       </motion.h1>
 
+      {/* Period Filter Bar */}
+      <div className="flex gap-3 items-end flex-col md:flex-row flex-wrap bg-white dark:bg-slate-800 p-4 rounded-lg border border-gray-300 dark:border-slate-600">
+        <div className="flex-1 flex gap-2">
+          <div>
+            <label className="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">
+              {i18n.language === 'ar' ? 'تاريخ البداية' : 'Date de début'}
+            </label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">
+              {i18n.language === 'ar' ? 'تاريخ النهاية' : 'Date de fin'}
+            </label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+            />
+          </div>
+        </div>
+        <Button
+          onClick={() => {
+            setAppliedStartDate(startDate);
+            setAppliedEndDate(endDate);
+          }}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          {i18n.language === 'ar' ? 'إنشاء' : 'Générer'}
+        </Button>
+        {(appliedStartDate || appliedEndDate) && (
+          <Button
+            onClick={() => {
+              setStartDate('');
+              setEndDate('');
+              setAppliedStartDate('');
+              setAppliedEndDate('');
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white"
+          >
+            {i18n.language === 'ar' ? 'مسح' : 'Effacer'}
+          </Button>
+        )}
+      </div>
+
       {/* Message Display */}
       {message && (
         <motion.div
@@ -397,7 +465,8 @@ ${project.project_versements.map((v, idx) => `<tr><td style="text-align:center;f
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {projects.map((project, i) => {
-            const projVersements = project.project_versements?.reduce((sum, v) => sum + v.amount, 0) || 0;
+            const filteredVersements = filterVersementsByDate(project.project_versements);
+            const projVersements = filteredVersements.reduce((sum, v) => sum + v.amount, 0) || 0;
             const projRemaining = project.total_amount - projVersements;
             
             return (
@@ -419,7 +488,7 @@ ${project.project_versements.map((v, idx) => `<tr><td style="text-align:center;f
                         </p>
                       </div>
                       <Badge className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-semibold">
-                        {project.project_versements?.length || 0} {t('comptable.versements')}
+                        {filteredVersements.length || 0} {t('comptable.versements')}
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground">{project.address}</p>
@@ -653,13 +722,13 @@ ${project.project_versements.map((v, idx) => `<tr><td style="text-align:center;f
                 <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
                   <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-2">{t('comptable.versements')}</p>
                   <p className="text-lg font-bold text-blue-700 dark:text-blue-300">{formatCurrency(
-                    selectedProject.project_versements?.reduce((sum, v) => sum + v.amount, 0) || 0
+                    filterVersementsByDate(selectedProject.project_versements)?.reduce((sum, v) => sum + v.amount, 0) || 0
                   )}</p>
                 </div>
                 <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200 dark:border-orange-700">
                   <p className="text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wide mb-2">{t('common.remaining')}</p>
                   <p className="text-lg font-bold text-orange-700 dark:text-orange-300">{formatCurrency(
-                    selectedProject.total_amount - (selectedProject.project_versements?.reduce((sum, v) => sum + v.amount, 0) || 0)
+                    selectedProject.total_amount - (filterVersementsByDate(selectedProject.project_versements)?.reduce((sum, v) => sum + v.amount, 0) || 0)
                   )}</p>
                 </div>
               </div>
@@ -675,34 +744,25 @@ ${project.project_versements.map((v, idx) => `<tr><td style="text-align:center;f
                 <div>
                   <h3 className="text-lg font-bold text-foreground mb-4 flex items-center gap-2">
                     <span className="w-1 h-6 bg-gradient-to-b from-blue-600 to-indigo-600 rounded" />
-                    {t('comptable.versements')} ({selectedProject.project_versements.length})
+                    {t('comptable.versements')} ({filterVersementsByDate(selectedProject.project_versements).length})
                   </h3>
                   <div className="border border-blue-200 dark:border-slate-600 rounded-lg overflow-hidden">
                     <table className="w-full text-sm">
-                      <thead className="bg-gradient-to-r from-blue-100 to-indigo-100 dark:from-slate-700 dark:to-slate-800 border-b border-blue-200 dark:border-slate-600">
-                        <tr>
-                          <th className="p-4 text-left font-bold text-blue-950 dark:text-blue-100">{t('common.date')}</th>
-                          <th className="p-4 text-left font-bold text-blue-950 dark:text-blue-100">{t('common.description')}</th>
-                          <th className="p-4 text-right font-bold text-blue-950 dark:text-blue-100">{t('common.amount')}</th>
+                      <thead>
+                        <tr className="bg-blue-50 dark:bg-slate-700">
+                          <th className="px-4 py-2 text-left font-semibold text-blue-900 dark:text-blue-100">#</th>
+                          <th className="px-4 py-2 text-left font-semibold text-blue-900 dark:text-blue-100">{t('common.description')}</th>
+                          <th className="px-4 py-2 text-left font-semibold text-blue-900 dark:text-blue-100">{t('common.date')}</th>
+                          <th className="px-4 py-2 text-right font-semibold text-blue-900 dark:text-blue-100">{t('common.amount')}</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedProject.project_versements.map((v, idx) => (
-                          <tr 
-                            key={v.id}
-                            className={`border-b border-blue-100 dark:border-slate-700 transition-colors ${
-                              idx % 2 === 0 
-                                ? 'bg-white dark:bg-slate-800' 
-                                : 'bg-blue-50 dark:bg-slate-700'
-                            } hover:bg-blue-100 dark:hover:bg-slate-600`}
-                          >
-                            <td className="p-4 font-semibold text-foreground">{formatDate(v.date)}</td>
-                            <td className="p-4 text-foreground">{v.description || '-'}</td>
-                            <td className="p-4 text-right">
-                              <span className="inline-block px-3 py-1 bg-emerald-100 dark:bg-emerald-600 text-emerald-700 dark:text-emerald-100 rounded-full font-semibold text-sm">
-                                {formatCurrency(v.amount)}
-                              </span>
-                            </td>
+                        {filterVersementsByDate(selectedProject.project_versements).map((v, idx) => (
+                          <tr key={v.id} className="border-t border-blue-200 dark:border-slate-600 hover:bg-blue-50 dark:hover:bg-slate-700/50">
+                            <td className="px-4 py-2 text-foreground">{idx + 1}</td>
+                            <td className="px-4 py-2 text-foreground">{v.description || '-'}</td>
+                            <td className="px-4 py-2 text-foreground">{v.date}</td>
+                            <td className="px-4 py-2 text-right font-semibold text-blue-700 dark:text-blue-300">{formatCurrency(v.amount)}</td>
                           </tr>
                         ))}
                       </tbody>

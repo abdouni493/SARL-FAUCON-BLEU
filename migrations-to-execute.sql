@@ -1,3 +1,471 @@
+
+===== MIGRATION 1: Payment Orders =====
+ALTER TABLE payment_orders 
+  ALTER COLUMN bon_commande_id DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS beneficiary TEXT;
+
+
+===== MIGRATION 2: Reception Products =====
+ALTER TABLE reception_products 
+  ADD COLUMN IF NOT EXISTS invoice_image_url TEXT;
+
+
+===== MIGRATION 3: Purchase Commands Validation =====
+ALTER TABLE purchase_commands 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+
+===== MIGRATION 4: Bons Commandes Validation =====
+ALTER TABLE bons_commandes 
+  ADD COLUMN IF NOT EXISTS purchase_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS comptable_validated BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT FALSE;
+
+-- ============================================================================
+-- PROJECT EXPENSES TABLE SCHEMA - ALTER EXISTING TABLE
+-- ============================================================================
+-- This modifies the existing project_expenses table to add missing columns
+-- for better project and user tracking
+
+-- Add missing columns to existing project_expenses table if they don't exist
+ALTER TABLE project_expenses
+ADD COLUMN IF NOT EXISTS created_by_id UUID,
+ADD COLUMN IF NOT EXISTS chef_de_projet_id UUID,
+ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'autre',
+ADD COLUMN IF NOT EXISTS notes TEXT,
+ADD COLUMN IF NOT EXISTS amount DECIMAL(12, 2);
+
+-- Add foreign key constraints for user references (if they don't already exist)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_created_by_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_created_by_id_fkey 
+      FOREIGN KEY (created_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'project_expenses_chef_de_projet_id_fkey'
+  ) THEN
+    ALTER TABLE project_expenses
+    ADD CONSTRAINT project_expenses_chef_de_projet_id_fkey 
+      FOREIGN KEY (chef_de_projet_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Create indexes for better query performance (if not already present)
+CREATE INDEX IF NOT EXISTS idx_project_expenses_project_box_id 
+  ON project_expenses(project_box_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_created_by_id 
+  ON project_expenses(created_by_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_chef_de_projet_id 
+  ON project_expenses(chef_de_projet_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_expense_date 
+  ON project_expenses(expense_date);
+
+CREATE INDEX IF NOT EXISTS idx_project_expenses_category 
+  ON project_expenses(category);
+
+-- Create or replace trigger to automatically update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_project_expenses_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop existing trigger if it exists, then create new one
+DROP TRIGGER IF EXISTS project_expenses_update_timestamp ON project_expenses;
+CREATE TRIGGER project_expenses_update_timestamp
+  BEFORE UPDATE ON project_expenses
+  FOR EACH ROW
+  EXECUTE FUNCTION update_project_expenses_timestamp();
+
+-- ============================================================================
+-- OPTIONAL: VIEWS FOR COMMON QUERIES
+-- ============================================================================
+
+-- View to get total expenses by project
+CREATE OR REPLACE VIEW project_expenses_summary AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  COUNT(pe.id) as expense_count,
+  SUM(pe.amount) as total_amount,
+  AVG(pe.amount) as average_expense,
+  MAX(pe.expense_date) as last_expense_date
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+GROUP BY pb.id, pb.name;
+
+-- View to get expenses by category per project
+CREATE OR REPLACE VIEW project_expenses_by_category AS
+SELECT 
+  pb.id as project_id,
+  pb.name as project_name,
+  pe.category,
+  COUNT(pe.id) as count,
+  SUM(pe.amount) as total_amount
+FROM project_boxes pb
+LEFT JOIN project_expenses pe ON pb.id = pe.project_box_id
+WHERE pe.category IS NOT NULL
+GROUP BY pb.id, pb.name, pe.category;
+
+-- ============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES - OPTIONAL
+-- ============================================================================
+-- Uncomment the following if you want to enable RLS for project_expenses
+
+-- Enable RLS on project_expenses table
+-- ALTER TABLE project_expenses ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can view expenses for their own projects
+-- CREATE POLICY project_expenses_view_own
+--   ON project_expenses FOR SELECT
+--   USING (
+--     created_by_id = auth.uid() 
+--     OR chef_de_projet_id = auth.uid()
+--     OR EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can insert expenses for their projects
+-- CREATE POLICY project_expenses_insert_own
+--   ON project_expenses FOR INSERT
+--   WITH CHECK (
+--     created_by_id = auth.uid()
+--     AND EXISTS (
+--       SELECT 1 FROM project_boxes pb
+--       WHERE pb.id = project_box_id AND pb.chef_id = auth.uid()
+--     )
+--   );
+
+-- Policy: Users can update expenses they created
+-- CREATE POLICY project_expenses_update_own
+--   ON project_expenses FOR UPDATE
+--   USING (created_by_id = auth.uid())
+--   WITH CHECK (created_by_id = auth.uid());
+
+-- Policy: Users can delete expenses they created
+-- CREATE POLICY project_expenses_delete_own
+--   ON project_expenses FOR DELETE
+--   USING (created_by_id = auth.uid());
+
+-- ============================================================================
+-- SAMPLE QUERIES FOR REFERENCE
+-- ============================================================================
+
+-- Get all expenses for a specific project
+-- SELECT * FROM project_expenses 
+-- WHERE project_box_id = 'PROJECT_ID_HERE'
+-- ORDER BY expense_date DESC;
+
+-- Get total expenses by project
+-- SELECT * FROM project_expenses_summary
+-- ORDER BY total_amount DESC;
+
+-- Get expenses by category for a project
+-- SELECT * FROM project_expenses_by_category
+-- WHERE project_id = 'PROJECT_ID_HERE'
+-- ORDER BY total_amount DESC;
+
+-- Get chef_de_projet expenses within date range
+-- SELECT * FROM project_expenses
+-- WHERE chef_de_projet_id = 'USER_ID_HERE'
+-- AND expense_date BETWEEN '2024-01-01' AND '2024-12-31'
+-- ORDER BY expense_date DESC;
+-- ============================================================================
+-- ADD_ADMIN_VALIDATION_TO_PAYMENT_ORDERS.sql
+-- ============================================================================
+-- PURPOSE: Add two-step validation for payment orders
+--   Step 1: Comptable validates (existing functionality)
+--   Step 2: General Administration validates (new)
+-- ============================================================================
+
+-- STEP 1: ADD ADMIN VALIDATION FIELDS
+-- ============================================================================
+-- Add columns to track administration validation
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated BOOLEAN DEFAULT false;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.payment_orders 
+ADD COLUMN IF NOT EXISTS admin_validated_at TIMESTAMP WITH TIME ZONE;
+
+-- ============================================================================
+-- STEP 2: UPDATE STATUS CONSTRAINT (Optional - for enhanced tracking)
+-- ============================================================================
+-- Current status: pending, validated
+-- After this change:
+--   pending = not validated by comptable
+--   validated = validated by comptable only
+--   finalized = validated by both comptable and administration
+
+-- NOTE: This comment documents the new workflow
+-- Do NOT execute the ALTER TABLE below if you want to keep existing status values
+-- Instead, use the boolean flags (admin_validated) to track admin approval
+
+-- If you want to add 'finalized' status, uncomment and run:
+-- ALTER TABLE public.payment_orders 
+-- DROP CONSTRAINT IF EXISTS payment_orders_status_check;
+
+-- ALTER TABLE public.payment_orders 
+-- ADD CONSTRAINT payment_orders_status_check 
+-- CHECK (status IN ('pending', 'validated', 'finalized'));
+
+-- ============================================================================
+-- STEP 3: CREATE INDEX FOR ADMIN VALIDATION QUERIES
+-- ============================================================================
+-- Improves performance for filtering orders by admin validation status
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated 
+ON public.payment_orders(admin_validated);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_admin_validated_by 
+ON public.payment_orders(admin_validated_by);
+
+CREATE INDEX IF NOT EXISTS idx_payment_orders_validation_status 
+ON public.payment_orders(status, admin_validated);
+
+-- ============================================================================
+-- STEP 4: VIEW - ORDERS AWAITING ADMIN VALIDATION
+-- ============================================================================
+-- Useful for administration dashboard - shows orders validated by comptable
+-- but not yet by administration
+
+CREATE OR REPLACE VIEW orders_awaiting_admin_validation AS
+SELECT 
+  po.id,
+  po.user_id,
+  po.bon_commande_id,
+  po.total_price,
+  po.note,
+  po.status,
+  po.admin_validated,
+  bc.bon_id,
+  bc.total_price as bon_total_price,
+  po.created_at,
+  po.updated_at,
+  CASE 
+    WHEN po.status = 'validated' AND po.admin_validated = false THEN 'Awaiting Admin Approval'
+    WHEN po.admin_validated = true THEN 'Admin Approved'
+    ELSE 'Not Yet Comptable Approved'
+  END as validation_stage
+FROM public.payment_orders po
+LEFT JOIN public.bons_commandes bc ON po.bon_commande_id = bc.id
+WHERE po.status = 'validated' AND po.admin_validated = false
+ORDER BY po.created_at ASC;
+
+-- ============================================================================
+-- STEP 5: VERIFICATION QUERIES
+-- ============================================================================
+
+-- Check if columns were added successfully
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'payment_orders'
+AND column_name IN ('admin_validated', 'admin_validated_by', 'admin_validated_at')
+ORDER BY column_name;
+
+-- Check if indexes were created
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'payment_orders'
+AND indexname LIKE '%admin%'
+ORDER BY indexname;
+
+-- Check if view was created
+SELECT table_name FROM information_schema.tables
+WHERE table_type = 'VIEW' AND table_name = 'orders_awaiting_admin_validation';
+
+-- ============================================================================
+-- STEP 6: SAMPLE DATA UPDATES (Optional - for testing)
+-- ============================================================================
+-- If you have existing validated orders, you can mark some for admin validation
+-- Uncomment to use:
+
+-- Mark first order as awaiting admin validation:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = false
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- Mark one order as admin validated:
+-- UPDATE public.payment_orders 
+-- SET admin_validated = true, 
+--     admin_validated_by = auth.uid(),
+--     admin_validated_at = CURRENT_TIMESTAMP
+-- WHERE status = 'validated'
+-- LIMIT 1;
+
+-- ============================================================================
+-- STEP 7: MIGRATION GUIDE
+-- ============================================================================
+
+-- VALIDATION WORKFLOW:
+-- 
+-- 1. User (Comptable Role):
+--    - Creates payment order (status = 'pending')
+--    - Clicks "Validate" button
+--    - Changes status to 'validated' (admin_validated = false)
+--
+-- 2. Manager (Administration Role):
+--    - Sees orders where status = 'validated' AND admin_validated = false
+--    - Reviews the order
+--    - Clicks "Admin Validate" button
+--    - Sets admin_validated = true, admin_validated_by = current_user, admin_validated_at = now
+--
+-- STATUSES:
+-- - pending: Created but not comptable validated
+-- - validated: Comptable validated, awaiting admin validation
+-- - finalized: Both comptable and admin validated (optional - use admin_validated boolean)
+
+-- ============================================================================
+-- COMPLETION CHECKLIST
+-- ============================================================================
+-- After running this SQL:
+--
+-- ✅ Columns added: admin_validated, admin_validated_by, admin_validated_at
+-- ✅ Indexes created for performance
+-- ✅ View created for admin dashboard
+-- ✅ Verification queries show correct output
+--
+-- Then update React component:
+-- ✅ Show "Comptable Validate" button if status = 'pending' AND user.role = 'comptable'
+-- ✅ Show "Admin Validate" button if status = 'validated' AND admin_validated = false AND user.role = 'admin'
+-- ✅ Show checkmark/approved badge if admin_validated = true
+
+-- ============================================================================
+-- SQL: Add Barcode Support to Products Table
+-- Purpose: Enable barcode scanning in Bons de Commande interface
+
+-- 1. Add barcode column to products table
+ALTER TABLE public.products ADD COLUMN barcode VARCHAR(255) UNIQUE;
+ALTER TABLE public.products ADD COLUMN barcode_type VARCHAR(50); -- e.g., 'EAN-13', 'UPC', 'QR'
+
+-- 2. Create index for faster barcode lookups
+CREATE INDEX idx_products_barcode ON public.products(barcode);
+
+-- 3. Add barcode column to bons_commandes_products table (optional, for local storage)
+ALTER TABLE public.bons_commandes_products ADD COLUMN barcode VARCHAR(255);
+
+-- 4. Create index for products_barcode_type
+CREATE INDEX idx_products_barcode_type ON public.products(barcode_type);
+
+-- 5. Add RLS policy for barcode scanning (if using RLS)
+-- Allow authenticated users to read products by barcode
+CREATE POLICY "Users can read products by barcode" ON public.products
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+-- Sample data insertion (optional - for testing)
+-- INSERT INTO public.products (name, barcode, barcode_type, unit_price)
+-- VALUES 
+--   ('Product A', '5901234123457', 'EAN-13', 100.00),
+--   ('Product B', '123456789012', 'UPC', 50.00),
+--   ('Product C', 'QR20240405001', 'QR', 75.00);
+
+-- Verification queries
+-- Check if barcode column exists:
+-- SELECT column_name FROM information_schema.columns 
+-- WHERE table_name='products' AND column_name='barcode';
+
+-- View products with barcodes:
+-- SELECT id, name, barcode, barcode_type, unit_price FROM public.products WHERE barcode IS NOT NULL;
+-- SQL Migration: Add Logo Support to Users Table
+-- This migration adds columns to store logo URLs for user profiles and enterprise settings
+
+-- 1. Add logo_url column to users table
+ALTER TABLE public.users
+ADD COLUMN logo_url character varying;
+
+-- 2. Create an enterprise_settings table if it doesn't exist
+CREATE TABLE IF NOT EXISTS public.enterprise_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  logo_url character varying,
+  company_name character varying NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by_id uuid,
+  CONSTRAINT enterprise_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT enterprise_settings_created_by_id_fkey FOREIGN KEY (created_by_id) REFERENCES auth.users(id)
+);
+
+-- 3. Create a storage bucket policy for logos if needed (run in Supabase dashboard)
+-- This creates a public bucket for logos
+/*
+INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true);
+
+CREATE POLICY "Allow public read access to logos" ON storage.objects
+  FOR SELECT USING (bucket_id = 'logos');
+
+CREATE POLICY "Allow authenticated users to upload logos" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to update their own logos" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Allow users to delete their own logos" ON storage.objects
+  FOR DELETE USING (bucket_id = 'logos' AND auth.role() = 'authenticated');
+*/
+
+-- 4. Add indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_users_logo_url ON public.users(logo_url);
+CREATE INDEX IF NOT EXISTS idx_enterprise_settings_created_by ON public.enterprise_settings(created_by_id);
+
+-- 5. Add RLS policies for enterprise_settings table
+ALTER TABLE public.enterprise_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow admin users to manage enterprise settings" ON public.enterprise_settings
+  FOR ALL USING (
+    auth.uid() = created_by_id OR 
+    EXISTS (
+      SELECT 1 FROM public.users 
+      WHERE id = auth.uid() AND role = 'admin'
+    )
+  );
+
+CREATE POLICY "Allow all authenticated users to view enterprise settings" ON public.enterprise_settings
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+-- 6. Add trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION public.update_enterprise_settings_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_enterprise_settings_updated_at
+  BEFORE UPDATE ON public.enterprise_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_enterprise_settings_updated_at();
+
+-- Notes:
+-- 1. Logo images will be stored in Supabase Storage bucket 'logos'
+-- 2. The logo_url will be the public URL returned by Supabase Storage
+-- 3. Max file size is recommended to be 5MB per logo
+-- 4. Supported formats: JPG, PNG, WebP, GIF
 -- ============================================================================
 -- SQL SCHEMA FOR RENDEZ-VOUS (APPOINTMENTS) & ORDRES DE PAIEMENT (PAYMENT ORDERS)
 -- ============================================================================

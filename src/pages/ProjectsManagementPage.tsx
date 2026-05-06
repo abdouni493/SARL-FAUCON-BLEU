@@ -71,6 +71,7 @@ export default function ProjectsManagementPage() {
   const [message, setMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<'name' | 'chef'>('name');
+  const [filterMonth, setFilterMonth] = useState('');
 
   // Dialog states
   const [showForm, setShowForm] = useState(false);
@@ -396,11 +397,22 @@ export default function ProjectsManagementPage() {
 
   // Filter projects
   const filteredProjects = projects.filter(p => {
+    // Apply search filter
+    let matchesSearch = true;
     if (searchField === 'name') {
-      return p.name.toLowerCase().includes(searchQuery.toLowerCase());
+      matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
     } else {
-      return (p.chef_de_projet_email || '').toLowerCase().includes(searchQuery.toLowerCase());
+      matchesSearch = (p.chef_de_projet_email || '').toLowerCase().includes(searchQuery.toLowerCase());
     }
+
+    // Apply month filter
+    let matchesMonth = true;
+    if (filterMonth) {
+      const projectMonth = p.created_at.substring(0, 7); // Extract YYYY-MM from created_at
+      matchesMonth = projectMonth === filterMonth;
+    }
+
+    return matchesSearch && matchesMonth;
   });
 
   return (
@@ -434,7 +446,7 @@ export default function ProjectsManagementPage() {
         </AnimatePresence>
 
         {/* Controls */}
-        <div className="mb-6 flex gap-4 flex-col md:flex-row">
+        <div className="mb-6 flex gap-4 flex-col md:flex-row items-end">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
             <Input
@@ -452,6 +464,21 @@ export default function ProjectsManagementPage() {
             <option value="name">{isRtl ? 'اسم المشروع' : 'Nom du projet'}</option>
             <option value="chef">{isRtl ? 'البريد الإلكتروني' : 'Email du chef'}</option>
           </select>
+          <input
+            type="month"
+            value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg"
+            title={isRtl ? 'تصفية حسب الشهر' : 'Filtrer par mois'}
+          />
+          {filterMonth && (
+            <Button
+              onClick={() => setFilterMonth('')}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {isRtl ? 'مسح' : 'Effacer'}
+            </Button>
+          )}
           <Button
             onClick={() => {
               resetForm();
@@ -512,11 +539,7 @@ export default function ProjectsManagementPage() {
                       <CardContent className="p-4">
                         <p className="text-gray-600 text-sm mb-3">{project.description}</p>
 
-                        <div className="grid grid-cols-4 gap-2 mb-4 text-center">
-                          <div className="bg-purple-50 p-2 rounded">
-                            <p className="text-xs text-gray-600">{isRtl ? 'الميزانية' : 'Budget initial'}</p>
-                            <p className="text-sm font-bold text-purple-700">{project.total_amount.toLocaleString()}</p>
-                          </div>
+                        <div className="grid grid-cols-3 gap-2 mb-4 text-center">
                           <div className="bg-red-50 p-2 rounded">
                             <p className="text-xs text-gray-600">{isRtl ? 'المصاريف' : 'Dépenses'}</p>
                             <p className="text-sm font-bold text-red-700">{totalOut.toLocaleString()}</p>
@@ -686,21 +709,6 @@ export default function ProjectsManagementPage() {
                   placeholder={isRtl ? 'الوصف' : 'Description'}
                   className="w-full px-4 py-3 border-2 border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
                   rows={3}
-                />
-              </div>
-
-              {/* Budget Field */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  {isRtl ? 'الميزانية الأولية' : 'Budget initial'} (DA)
-                </label>
-                <Input
-                  type="number"
-                  value={form.total_amount}
-                  onChange={(e) => setForm({ ...form, total_amount: parseFloat(e.target.value) || 0 })}
-                  placeholder="0"
-                  step="0.01"
-                  className="px-4 py-3 border-2 border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 />
               </div>
             </div>

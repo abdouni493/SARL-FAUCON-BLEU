@@ -28,6 +28,7 @@ interface ReceptionProduct {
   total_quantity: number;
   total_price: number;
   notes?: string;
+  invoice_image_url?: string;
   created_at: string;
 }
 
@@ -128,6 +129,8 @@ export default function ReceiveProductsPage() {
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [validatingId, setValidatingId] = useState<string | null>(null);
   const [pendingPrintReception, setPendingPrintReception] = useState<ReceptionProduct | null>(null);
+  const [invoiceImage, setInvoiceImage] = useState<File | null>(null);
+  const [invoiceImageUrl, setInvoiceImageUrl] = useState<string>('');
 
   // Fetch data on mount
   useEffect(() => {
@@ -235,6 +238,30 @@ export default function ReceiveProductsPage() {
       }
 
       const supplier = suppliers.find(s => s.id === selectedSupplier);
+      let uploadedImageUrl = invoiceImageUrl;
+
+      // Upload invoice image if provided
+      if (invoiceImage) {
+        try {
+          const timestamp = new Date().getTime();
+          const fileName = `invoices/${user?.id}/${timestamp}_${invoiceImage.name}`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('invoices')
+            .upload(fileName, invoiceImage, { upsert: false });
+
+          if (uploadError) throw uploadError;
+
+          const { data: publicUrlData } = supabase.storage
+            .from('invoices')
+            .getPublicUrl(fileName);
+
+          uploadedImageUrl = publicUrlData.publicUrl;
+        } catch (uploadErr: any) {
+          setMessage(`Error uploading invoice image: ${uploadErr.message}`);
+          return;
+        }
+      }
+
       if (!editingReceptionId) {
         const newReceptionId = generateReceptionId();
         const totalQuantity = validProducts.reduce((sum, p) => sum + p.quantity, 0);
@@ -251,6 +278,7 @@ export default function ReceiveProductsPage() {
             total_quantity: totalQuantity,
             total_price: totalPrice,
             notes: receptionNotes || '',
+            invoice_image_url: uploadedImageUrl || null,
             created_by_id: user?.id,
           }])
           .select()
@@ -285,6 +313,7 @@ export default function ReceiveProductsPage() {
             status: 'completed',
             total_quantity: totalQuantity,
             total_price: totalPrice,
+            invoice_image_url: uploadedImageUrl || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingReceptionId);
@@ -313,6 +342,8 @@ export default function ReceiveProductsPage() {
       setSelectedSupplier('');
       setReceptionNotes('');
       setProducts([{ product_name: '', category_id: '', unity_id: '', quantity: 1, price_per_unity: 0 }]);
+      setInvoiceImage(null);
+      setInvoiceImageUrl('');
       setEditingReceptionId(null);
       await fetchData();
       setTimeout(() => setMessage(''), 3000);
@@ -494,6 +525,16 @@ export default function ReceiveProductsPage() {
                 </div>
               </div>
 
+              {reception.invoice_image_url && (
+                <div className="mb-4">
+                  <img
+                    src={reception.invoice_image_url}
+                    alt="Invoice"
+                    className="w-full h-32 object-cover rounded-lg border border-gray-300 dark:border-slate-600"
+                  />
+                </div>
+              )}
+
               <p className="text-xs text-muted-foreground mb-4">{new Date(reception.created_at).toLocaleDateString()}</p>
 
               <div className="flex gap-2 flex-wrap">
@@ -654,6 +695,26 @@ export default function ReceiveProductsPage() {
                 value={receptionNotes}
                 onChange={(e) => setReceptionNotes(e.target.value)}
               />
+            </div>
+
+            {/* Invoice Image Upload */}
+            <div>
+              <label className="text-sm font-bold text-foreground block mb-2">
+                {t('common.invoice_image') || 'صورة الفاتورة / Image facture'}
+              </label>
+              <div className="flex gap-2 items-end">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setInvoiceImage(e.target.files?.[0] || null)}
+                  className="flex-1 px-3 py-2 border-2 border-slate-200 dark:border-slate-700 rounded-lg focus:border-blue-500"
+                />
+                {invoiceImage && (
+                  <span className="text-sm text-green-600 font-semibold">
+                    ✓ {invoiceImage.name}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 

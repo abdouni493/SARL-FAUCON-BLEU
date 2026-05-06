@@ -48,6 +48,7 @@ export default function SupplierManagementPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [viewSupplier, setViewSupplier] = useState<Supplier | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -256,6 +257,27 @@ export default function SupplierManagementPage() {
         </motion.div>
       )}
 
+      {/* Search Input */}
+      {suppliers.length > 0 && (
+        <div className="flex gap-2 items-center">
+          <Input
+            placeholder={isRtl ? 'ابحث عن المورد...' : 'Rechercher un fournisseur...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1"
+          />
+          {searchQuery && (
+            <Button
+              size="sm"
+              onClick={() => setSearchQuery('')}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Suppliers Grid */}
       {loading ? (
         <div className="flex items-center justify-center h-64">
@@ -267,17 +289,33 @@ export default function SupplierManagementPage() {
           <p className="text-muted-foreground">{t('common.no_data')}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          <AnimatePresence>
-            {suppliers.map((supplier, idx) => (
-              <motion.div
-                key={supplier.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ delay: idx * 0.05 }}
-                className="bg-white dark:bg-slate-800 rounded-lg border border-blue-200 dark:border-slate-700 hover:shadow-lg transition-all duration-300 flex flex-col overflow-hidden group"
-              >
+        <>
+          {(() => {
+            const filteredSuppliers = suppliers.filter(supplier =>
+              supplier.name.toLowerCase().includes(searchQuery.toLowerCase())
+            );
+            
+            if (filteredSuppliers.length === 0 && searchQuery) {
+              return (
+                <div className="text-center p-12 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground">{isRtl ? 'لا توجد نتائج' : 'Aucun résultat'}</p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <AnimatePresence>
+                  {filteredSuppliers.map((supplier, idx) => (
+                    <motion.div
+                      key={supplier.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
+                      transition={{ delay: idx * 0.05 }}
+                      className="bg-white dark:bg-slate-800 rounded-lg border border-blue-200 dark:border-slate-700 hover:shadow-lg transition-all duration-300 flex flex-col overflow-hidden group"
+                    >
                 {/* Header */}
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-700 dark:to-slate-800 px-6 py-4 border-b border-blue-200 dark:border-slate-700">
                   <h3 className="font-bold text-lg text-blue-900 dark:text-blue-100 truncate">{supplier.name}</h3>
@@ -345,6 +383,9 @@ export default function SupplierManagementPage() {
             ))}
           </AnimatePresence>
         </div>
+            );
+          })()}
+        </>
       )}
 
       {/* View Supplier Dialog */}
