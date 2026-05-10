@@ -62,10 +62,16 @@
     "logout": "تسجيل الخروج"
   },
   "common": {
+    "all_categories": "جميع الفئات",
+    "all_projects": "جميع المشاريع",
+    "clear": "مسح",
     "view": "عرض",
     "edit": "تعديل",
     "delete": "حذف",
     "print": "طباعة",
+    "search": "بحث",
+    "search_storages": "البحث عن المستودعات...",
+    "search_products": "البحث عن المنتجات...",
     "manage_material_commands": "إدارة وتتبع جميع أوامر المواد",
     "manage_command_products": "إضافة أو إدارة المنتجات لهذا الأمر",
     "view_command_details": "عرض المعلومات التفصيلية حول هذا الأمر",
@@ -76,7 +82,6 @@
     "cancel": "إلغاء",
     "confirm": "تأكيد",
     "add": "إضافة",
-    "search": "بحث",
     "create": "إنشاء",
     "create_new": "إنشاء جديد",
     "validate": "تأكيد",
@@ -93,6 +98,7 @@
     "price": "السعر",
     "price_per_unit": "السعر لكل وحدة",
     "unit_price": "السعر الوحدة",
+    "payment_orders": "أوامر الدفع",
     "total_price": "السعر الإجمالي",
     "pricing_summary": "ملخص التسعير",
     "auto_calculated": "محسوب تلقائياً",
@@ -108,7 +114,7 @@
     "fully_approved": "معتمد بالكامل ✅",
     "create_payment": "إنشاء أمر دفع",
     "payment_order": "أمر الدفع",
-    "payment_orders": "أوامر الدفع",
+    "payment_orders_search_placeholder": "البحث بالرقم، الملاحظة أو المشروع...",
     "order_id_label": "الطلب #",
     "bon_label": "أمر:",
     "total_bons": "إجمالي الأوامر",
@@ -337,7 +343,6 @@
     "advanced_filters": "عوامل التصفية المتقدمة",
     "storages": "المستودعات",
     "projects": "المشاريع",
-    "workers": "العاملون",
     "clear_filters": "مسح المرشحات",
     "chef_de_projet": "رئيس المشروع",
     "close_report": "إغلاق التقرير",
@@ -597,6 +602,9 @@
     "error_saving": "خطأ في حفظ المعاملة",
     "manage_general_cash": "إدارة الصندوق العام"
   },
+  "commands": {
+    "search_placeholder": "البحث بالرقم، المشروع أو الرئيس..."
+  },
   "project_financing": {
     "title": "تمويل المشاريع",
     "description": "إدارة المدفوعات والتخصيصات",
@@ -646,6 +654,7 @@
     "select_print_mode": "اختر طريقة الطباعة"
   },
   "debt_management": {
+    "search_placeholder": "البحث بالمورد، الرقم أو الوصف...",
     "add_new_debt": "إضافة دين جديد",
     "search_bon_commande": "ابحث عن بون كوماند",
     "search_by_id_amount": "ابحث برقم أو مبلغ...",
@@ -691,6 +700,9 @@
     "completed_count": "مكتمل",
     "percent_paid": "مدفوع"
   },
+  "bons": {
+    "search_placeholder": "البحث بالرقم، المشروع أو المورد..."
+  },
   "bonCommandes": {
     "supplier": "المورد",
     "notAssigned": "غير معين",
@@ -711,6 +723,7 @@
     "action_cannot_undo": "لا يمكن التراجع عن هذا الإجراء"
   },
   "workers": {
+    "search_placeholder": "البحث بالاسم، البريد أو اسم المستخدم...",
     "required_information": "المعلومات المطلوبة",
     "enter_full_name": "أدخل الاسم الكامل...",
     "enter_username": "أدخل اسم المستخدم...",
@@ -796,5 +809,8 @@
     "worker": "عامل",
     "close_report": "إغلاق التقرير",
     "export_excel": "تصدير إلى Excel"
+  },
+  "payment_orders": {
+    "search_placeholder": "البحث بالرقم، الملاحظة أو المشروع..."
   }
 }

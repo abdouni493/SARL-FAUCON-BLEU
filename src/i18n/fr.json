@@ -62,10 +62,16 @@
     "logout": "Déconnexion"
   },
   "common": {
+    "all_categories": "Toutes les catégories",
+    "all_projects": "Tous les projets",
+    "clear": "Effacer",
     "view": "Voir",
     "edit": "Modifier",
     "delete": "Supprimer",
     "print": "Imprimer",
+    "search": "Rechercher",
+    "search_storages": "Rechercher des entrepôts...",
+    "search_products": "Rechercher des produits...",
     "manage_material_commands": "Gérer et suivre toutes les commandes de matériel",
     "manage_command_products": "Ajouter ou gérer les produits pour cette commande",
     "view_command_details": "Afficher les informations détaillées sur cette commande",
@@ -77,7 +83,6 @@
     "cancel": "Annuler",
     "confirm": "Confirmer",
     "add": "Ajouter",
-    "search": "Rechercher",
     "create": "Créer",
     "create_new": "Créer Nouveau",
     "validate": "Valider",
@@ -100,15 +105,15 @@
     "date": "Date",
     "description": "Description",
     "total": "Total",
+    "payment_orders": "Ordres de Paiement",
     "total_payment_orders": "Total Commandes de Paiement",
     "pending_orders": "Commandes en attente",
     "validated_orders": "Commandes validées",
-    "total_amount": "Montant total",
+    "total_amount": "Montant Total",
     "payment_amount_currency": "DA",
     "pending_comptable_approval": "En attente d'approbation du comptable",
     "pending_admin_approval": "En attente d'approbation de l'admin",
     "fully_approved": "Entièrement approuvé ✅",
-    "validate": "Valider",
     "view_details": "Voir les détails",
     "create_payment": "Créer Paiement",
     "payment_order": "Ordre de Paiement",
@@ -173,7 +178,6 @@
     "will_convert_to_purchase_order": "Ce produit sera converti en Commande d'Achat",
     "found": "Trouvé",
     "access_denied": "Accès refusé",
-    "all_fields_required": "Tous les champs sont obligatoires",
     "saved_successfully": "Enregistré avec succès!",
     "updated_successfully": "Mis à jour avec succès!",
     "deleted_successfully": "Supprimé avec succès!",
@@ -193,7 +197,6 @@
     "not_assigned": "Non assigné",
     "in_stock": "En Stock",
     "out_of_stock": "Rupture de Stock",
-    "total_amount": "Montant Total",
     "missing_products": "Produits Manquants",
     "chef_id": "Chef de Projet",
     "request_finance": "Demander Financement",
@@ -204,7 +207,6 @@
     "command": "Commande",
     "pending_reclamations": "Réclamations en Attente",
     "resolved_reclamations": "Réclamations Résolues",
-    "view_details": "Voir les détails",
     "reply": "Répondre",
     "response": "Réponse",
     "resolved": "Résolu",
@@ -228,7 +230,6 @@
     "add_another_offer": "Ajouter une autre offre",
     "change_picture": "Changer la photo",
     "add_picture": "Ajouter une photo",
-    "select": "Sélectionner",
     "enter": "Entrer",
     "close": "Fermer",
     "after": "après",
@@ -239,7 +240,6 @@
     "edit_command": "Modifier la commande",
     "manage_categories": "Gérer les catégories",
     "manage_unities": "Gérer les unités",
-    "create_command": "Créer une nouvelle commande",
     "product_name": "Nom du Produit",
     "create_expense": "Créer une nouvelle dépense",
     "edit_expense": "Modifier la dépense",
@@ -249,6 +249,7 @@
     "save_products": "Enregistrer les produits",
     "manage": "Gérer",
     "manage_team_members": "Gérer les membres de l'équipe",
+    "search_placeholder": "Rechercher par nom, email ou nom d'utilisateur...",
     "items": "Éléments",
     "products": "Produits",
     "no_products": "Aucun produit",
@@ -261,7 +262,6 @@
     "save_offers": "Enregistrer les offres",
     "confirm_delete_message": "Cette action ne peut pas être annulée.",
     "completed": "Complété",
-    "received": "Reçu",
     "reclamation": "Réclamation",
     "enter_message": "Entrez votre message...",
     "send": "Envoyer",
@@ -269,7 +269,6 @@
     "new": "Nouveau/Nouvelle",
     "all": "Tous les",
     "add_another": "Ajouter un(e) autre",
-    "product": "Produit",
     "new_appointment": "Nouveau Rendez-vous",
     "edit_appointment": "Modifier le Rendez-vous",
     "appointment": "Rendez-vous",
@@ -336,12 +335,10 @@
     "check": "Chèque",
     "bank_transfer": "Virement Bancaire",
     "other": "Autre",
-    "max": "Max",
     "select_date_range": "Veuillez sélectionner une plage de dates",
     "advanced_filters": "Filtres Avancés",
     "storages": "Entrepôts",
     "projects": "Projets",
-    "workers": "Travailleurs",
     "clear_filters": "Effacer les Filtres",
     "chef_de_projet": "Chef de Projet",
     "close_report": "Fermer le Rapport",
@@ -597,9 +594,12 @@
     "manage_general_cash": "Gérer la Caisse Générale",
     "close": "Fermer"
   },
+  "commands": {
+    "search_placeholder": "Rechercher par ID, Projet ou Chef..."
+  },
   "project_financing": {
     "title": "Finances Projets",
-    "description": "Gestion des versements et allocations",
+    "description": "Description",
     "search": "Rechercher un projet...",
     "new_versement": "Nouveau Versement",
     "financing_description": "Gérer les allocations et dépenses des projets",
@@ -620,7 +620,6 @@
     "entree": "Entrée",
     "sortie": "Sortie",
     "detail_type": "Type",
-    "description": "Description",
     "amount": "Montant",
     "date": "Date",
     "no_financing": "Aucun financement trouvé",
@@ -651,6 +650,7 @@
     "select_print_mode": "Sélectionnez le mode d'impression"
   },
   "debt_management": {
+    "search_placeholder": "Rechercher par Fournisseur, ID ou Description...",
     "add_new_debt": "Ajouter une nouvelle dette",
     "search_bon_commande": "Rechercher un bon de commande",
     "search_by_id_amount": "Rechercher par ID ou montant...",
@@ -696,6 +696,9 @@
     "completed_count": "Complété",
     "percent_paid": "Payé"
   },
+  "bons": {
+    "search_placeholder": "Rechercher par ID, Projet ou Fournisseur..."
+  },
   "bonCommandes": {
     "supplier": "Fournisseur",
     "notAssigned": "Non attribué",
@@ -716,6 +719,7 @@
     "action_cannot_undo": "Cette action ne peut pas être annulée"
   },
   "workers": {
+    "search_placeholder": "Rechercher par nom, email ou nom d'utilisateur...",
     "required_information": "Informations Requises",
     "enter_full_name": "Entrez le nom complet...",
     "enter_username": "Entrez le nom d'utilisateur...",
@@ -801,5 +805,8 @@
     "worker": "Travailleur",
     "close_report": "Fermer le Rapport",
     "export_excel": "Exporter vers Excel"
+  },
+  "payment_orders": {
+    "search_placeholder": "Rechercher par ID, Note ou Projet..."
   }
 }

@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { supabase } from '@/lib/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Plus, Edit2, Trash2, X, AlertCircle, CheckCircle, Mail, User, Shield } from 'lucide-react';
+import { Users, Plus, Edit2, Trash2, X, AlertCircle, CheckCircle, Mail, User, Shield, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,6 +43,7 @@ export default function WorkersManagementPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [dbWorkers, setDbWorkers] = useState<any[]>([]);
   const [loadingWorkers, setLoadingWorkers] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Fetch workers from Supabase on component mount
   useEffect(() => {
@@ -230,6 +231,12 @@ export default function WorkersManagementPage() {
     );
   }
 
+  const filteredWorkers = dbWorkers.filter(w => 
+    w.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    w.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    w.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className={`${i18n.language === 'ar' ? 'rtl' : 'ltr'} min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800`}>
       {/* Header Section */}
@@ -261,6 +268,25 @@ export default function WorkersManagementPage() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col md:flex-row gap-4 mb-6">
+          <div className="relative flex-1">
+            <Input
+              placeholder={t('workers.search_placeholder') || 'Rechercher des travailleurs...'}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={i18n.language === 'ar' ? 'pr-10' : 'pl-10'}
+            />
+            <Search className={`absolute top-2.5 h-5 w-5 text-muted-foreground ${i18n.language === 'ar' ? 'right-3' : 'left-3'}`} />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className={`absolute top-2.5 hover:text-foreground ${i18n.language === 'ar' ? 'left-3' : 'right-3'}`}
+              >
+                <X className="w-5 h-5 text-muted-foreground" />
+              </button>
+            )}
+          </div>
+        </div>
         {message && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
@@ -294,16 +320,17 @@ export default function WorkersManagementPage() {
             />
             <p className="text-slate-600 dark:text-slate-400">{t('login.loading')}</p>
           </div>
-        ) : dbWorkers.length === 0 ? (
+        ) : filteredWorkers.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto mb-4">
               <Users className="w-8 h-8 text-slate-400 dark:text-slate-500" />
             </div>
             <p className="text-slate-600 dark:text-slate-400 font-medium">{t('common.no_data') || 'No workers found'}</p>
+            {searchQuery && <p className="text-sm text-slate-500 dark:text-slate-500 mt-2">{t('common.no_results_found') || 'Aucun résultat trouvé'}</p>}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {dbWorkers.map((worker, idx) => (
+            {filteredWorkers.map((worker, idx) => (
               <motion.div
                 key={worker.id}
                 initial={{ opacity: 0, y: 20 }}

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { motion } from 'framer-motion';
-import { Eye, Edit, Trash2, X, Plus, Save, Loader, Printer } from 'lucide-react';
+import { Eye, Edit, Trash2, X, Plus, Save, Loader, Printer, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -28,6 +28,9 @@ interface MaterialCommand {
   status: string;
   created_by_id: string;
   created_at: string;
+  project_id?: string;
+  project_name?: string;
+  created_by_name?: string;
   command_products: CommandProduct[];
 }
 
@@ -59,6 +62,7 @@ export default function MaterialCommandsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [unities, setUnities] = useState<Unity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   const [viewCmd, setViewCmd] = useState<MaterialCommand | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -88,9 +92,7 @@ export default function MaterialCommandsPage() {
           .select(`
             id, command_id, status, created_by_id, created_at,
             command_products (
-              id, product_name, category_id, unity_id, quantity, note,
-              categories (id, name),
-              unities (id, name)
+              id, product_name, category_id, unity_id, quantity, note
             )
           `)
           .order('created_at', { ascending: false }),
@@ -102,7 +104,16 @@ export default function MaterialCommandsPage() {
       if (catRes.error) throw catRes.error;
       if (unityRes.error) throw unityRes.error;
 
-      setCommands(cmdRes.data || []);
+      const { data: usersData } = await supabase.from('users').select('id, full_name');
+      const userMap = Object.fromEntries((usersData || []).map(u => [u.id, u.full_name]));
+      
+      const enrichedCommands = (cmdRes.data || []).map((cmd: any) => ({
+        ...cmd,
+        project_name: 'N/A', // Relationship removed to fix error
+        created_by_name: userMap[cmd.created_by_id] || 'System'
+      }));
+
+      setCommands(enrichedCommands);
       setCategories(catRes.data || []);
       setUnities(unityRes.data || []);
     } catch (err: any) {
@@ -557,6 +568,12 @@ export default function MaterialCommandsPage() {
     );
   }
 
+  const filteredCommands = commands.filter(cmd => 
+    cmd.command_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (cmd.project_name && cmd.project_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (cmd.created_by_name && cmd.created_by_name.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
   return (
     <div className="space-y-6">
       {message && (
@@ -584,13 +601,32 @@ export default function MaterialCommandsPage() {
         </Button>
       </div>
 
-      {commands.length === 0 ? (
+      <div className="relative mb-6">
+        <Input
+          placeholder={t('commands.search_placeholder') || 'Rechercher par ID, Projet ou Chef...'}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-10 h-11"
+        />
+        <Search className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-3 hover:text-foreground"
+          >
+            <X className="w-5 h-5 text-muted-foreground" />
+          </button>
+        )}
+      </div>
+
+      {filteredCommands.length === 0 ? (
         <div className="erp-card text-center py-16 text-muted-foreground">
           <p className="text-lg">{t('common.no_data')}</p>
+          {searchQuery && <p className="text-sm mt-2">{t('common.no_results_found')}</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {commands.map((cmd, i) => (
+          {filteredCommands.map((cmd, i) => (
             <motion.div
               key={cmd.id}
               initial={{ opacity: 0, y: 20 }}

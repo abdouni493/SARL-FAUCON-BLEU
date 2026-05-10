@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { motion } from 'framer-motion';
-import { Eye, Edit, Trash2, Plus, Save, Loader, Package, Warehouse } from 'lucide-react';
+import { Eye, Edit, Trash2, Plus, Save, Loader, Package, Warehouse, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -65,6 +65,7 @@ export default function StoragesPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Dialog states
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -213,6 +214,11 @@ export default function StoragesPage() {
     }
   };
 
+  const filteredStorages = storages.filter(s => 
+    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (s.address && s.address.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-6">
       {/* Header */}
@@ -234,6 +240,25 @@ export default function StoragesPage() {
             <Plus className="w-5 h-5" />
             {t('common.add_storage')}
           </Button>
+        </div>
+
+        {/* Search Bar */}
+        <div className="relative mb-6">
+          <Input
+            placeholder={t('common.search_storages') || 'Rechercher des entrepôts...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={`max-w-md ${isRtl ? 'pr-10' : 'pl-10'} h-12 rounded-xl border-blue-100 dark:border-slate-700 shadow-sm`}
+          />
+          <Search className={`absolute top-3.5 h-5 w-5 text-muted-foreground ${isRtl ? 'right-3' : 'left-3'}`} />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className={`absolute top-3.5 hover:text-foreground ${isRtl ? 'left-3' : 'right-3'}`}
+            >
+              <X className="w-5 h-5 text-muted-foreground" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -286,7 +311,7 @@ export default function StoragesPage() {
             <p className="text-muted-foreground">{t('common.loading')}</p>
           </div>
         </div>
-      ) : storages.length === 0 ? (
+      ) : filteredStorages.length === 0 ? (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -294,12 +319,12 @@ export default function StoragesPage() {
         >
           <Warehouse className="w-16 h-16 mx-auto text-muted-foreground mb-4 opacity-50" />
           <p className="text-muted-foreground text-lg">{t('common.no_data')}</p>
-          <p className="text-sm text-muted-foreground mt-2">{t('common.create_first_storage')}</p>
+          {searchQuery && <p className="text-sm text-muted-foreground mt-2">{t('common.no_results_found') || 'Aucun résultat trouvé'}</p>}
         </motion.div>
       ) : (
         /* Storages Grid */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {storages.map((storage, idx) => (
+          {filteredStorages.map((storage, idx) => (
             <motion.div
               key={storage.id}
               initial={{ opacity: 0, y: 20 }}

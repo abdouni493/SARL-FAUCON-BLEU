@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { motion } from 'framer-motion';
-import { Eye, CheckCircle, Package, ShoppingCart, Filter, Loader, Trash2, Printer, AlertCircle } from 'lucide-react';
+import { Eye, CheckCircle, Package, ShoppingCart, Filter, Loader, Trash2, Printer, AlertCircle, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Card } from '@/components/ui/card';
@@ -21,6 +22,8 @@ interface PurchaseCommand {
   supplier_id?: string | null;
   supplier_name?: string | null;
   creator_name?: string;
+  project_id?: string;
+  project_name?: string;
 }
 
 interface MissingProduct {
@@ -66,6 +69,7 @@ export default function PurchaseCommandsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'validated'>('all');
   const [message, setMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [pendingPrintCmd, setPendingPrintCmd] = useState<PurchaseCommand | null>(null);
 
   useEffect(() => {
@@ -99,7 +103,8 @@ export default function PurchaseCommandsPage() {
             .single();
           return {
             ...cmd,
-            creator_name: userData?.full_name || 'Unknown'
+            creator_name: userData?.full_name || 'Unknown',
+            project_name: 'N/A'
           };
         })
       );
@@ -117,9 +122,14 @@ export default function PurchaseCommandsPage() {
   const validatedCommands = commands.filter(c => c.status === 'validated');
 
   const filteredCommands =
-    filterStatus === 'pending' ? purchaseCommands
+    (filterStatus === 'pending' ? purchaseCommands
       : filterStatus === 'validated' ? validatedCommands
-        : commands;
+        : commands).filter(cmd => 
+          cmd.command_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (cmd.project_name && cmd.project_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (cmd.creator_name && cmd.creator_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (cmd.supplier_name && cmd.supplier_name.toLowerCase().includes(searchQuery.toLowerCase()))
+        );
 
   const fetchMissingProducts = async (purchaseCommandId: string) => {
     try {
@@ -483,11 +493,30 @@ export default function PurchaseCommandsPage() {
         >
           {t('common.validated')}
         </Button>
+
+        <div className="relative flex-1 max-w-md">
+          <Input
+            placeholder={t('commands.search_placeholder') || 'Rechercher par ID, Projet, Chef ou Fournisseur...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 h-9"
+          />
+          <Search className="absolute left-3 top-2 h-5 w-5 text-muted-foreground" />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-2 hover:text-foreground"
+            >
+              <X className="w-4 h-4 text-muted-foreground" />
+            </button>
+          )}
+        </div>
       </motion.div>
 
       {filteredCommands.length === 0 ? (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="erp-card text-center py-12 text-muted-foreground">
-          {t('common.no_data')}
+          <p>{t('common.no_data')}</p>
+          {searchQuery && <p className="text-sm mt-2">{t('common.no_results_found')}</p>}
         </motion.div>
       ) : (
         <motion.div
@@ -535,6 +564,9 @@ export default function PurchaseCommandsPage() {
                       <p className="font-bold text-foreground text-lg">{cmd.command_id}</p>
                       <p className="text-xs text-muted-foreground mt-1">{t('common.date')}: {new Date(cmd.created_at).toLocaleDateString()}</p>
                       <p className="text-xs text-muted-foreground mt-1 font-semibold">👤 {cmd.creator_name}</p>
+                      {cmd.project_name && cmd.project_name !== 'N/A' && (
+                        <p className="text-xs text-blue-600 font-semibold mt-1">🏗️ {cmd.project_name}</p>
+                      )}
                     </div>
                     <Badge className={cmd.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 font-semibold' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-semibold'}>
                       {cmd.status === 'pending' ? t('common.pending') : t('common.validated')}

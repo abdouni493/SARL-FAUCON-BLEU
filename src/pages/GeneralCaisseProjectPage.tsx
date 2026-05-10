@@ -266,59 +266,6 @@ export default function GeneralCaisseProjectPage() {
           )}
         </AnimatePresence>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <Card className="border-0 shadow-lg">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm">{t('general_cash_box.total_versements')}</p>
-                  <p className="text-2xl font-bold text-green-600">{totalVersements.toLocaleString()}</p>
-                </div>
-                <TrendingUp className="w-8 h-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 shadow-lg">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm">{t('general_cash_box.total_retraits')}</p>
-                  <p className="text-2xl font-bold text-orange-600">{totalRetraits.toLocaleString()}</p>
-                </div>
-                <TrendingDown className="w-8 h-8 text-orange-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 shadow-lg">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm">{t('general_cash_box.total_depenses')}</p>
-                  <p className="text-2xl font-bold text-red-600">{totalDepenses.toLocaleString()}</p>
-                </div>
-                <Wallet className="w-8 h-8 text-red-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className={`border-0 shadow-lg ${balance >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm">{t('general_cash_box.balance')}</p>
-                  <p className={`text-2xl font-bold ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {balance.toLocaleString()}
-                  </p>
-                </div>
-                <Download className={`w-8 h-8 ${balance >= 0 ? 'text-green-500' : 'text-red-500'}`} />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
         {/* Controls */}
         <div className="mb-6 flex gap-4 flex-col md:flex-row">
           <div className="flex-1 relative">

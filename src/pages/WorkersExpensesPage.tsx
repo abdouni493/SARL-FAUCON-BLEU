@@ -7,9 +7,11 @@ import { getPrintLabels, buildPrintHTML, openPrintWindow, formatDateLocale } fro
 import { motion, AnimatePresence } from 'framer-motion';
 import { Receipt, Plus, Edit2, Trash2, X, AlertCircle, CheckCircle, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Search } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface WorkerExpense {
   id: string;
@@ -43,6 +45,9 @@ export default function WorkersExpensesPage() {
   const [message, setMessage] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [pendingPrintExpense, setPendingPrintExpense] = useState<WorkerExpense | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProject, setSelectedProject] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('all');
   const [form, setForm] = useState({
     description: '',
     category: 'Salaire',
@@ -188,7 +193,8 @@ export default function WorkersExpensesPage() {
       category: expense.category,
       amount: expense.amount.toString(),
       expense_date: expense.expense_date,
-      notes: expense.notes
+      notes: expense.notes,
+      project_id: expense.project_id || ''
     });
     setEditId(expense.id);
     setShowForm(true);
@@ -211,6 +217,14 @@ export default function WorkersExpensesPage() {
     openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة نفقة عامل', fr: 'Document Dépense Travailleur' }, enterpriseSettings }, body));
   };
 
+  const filteredExpenses = expenses.filter(e => {
+    const matchesSearch = e.description.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                         (e.notes && e.notes.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesProject = selectedProject === 'all' || e.project_id === selectedProject;
+    const matchesCategory = selectedCategory === 'all' || e.category === selectedCategory;
+    return matchesSearch && matchesProject && matchesCategory;
+  });
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -222,6 +236,56 @@ export default function WorkersExpensesPage() {
         <Button onClick={openCreate} className="btn-gradient gap-2">
           <Plus className="w-4 h-4" /> {t('common.create')}
         </Button>
+      </div>
+
+      {/* Filters */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+        <div className="relative">
+          <Input
+            placeholder={t('common.search') || 'Rechercher...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={isRtl ? 'pr-10' : 'pl-10'}
+          />
+          <Search className={`absolute top-2.5 h-5 w-5 text-muted-foreground ${isRtl ? 'right-3' : 'left-3'}`} />
+        </div>
+        <Select value={selectedProject} onValueChange={setSelectedProject}>
+          <SelectTrigger>
+            <SelectValue placeholder={t('common.project') || 'Projet'} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('common.all_projects') || 'Tous les projets'}</SelectItem>
+            {projects.map(p => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="flex gap-2">
+          <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+            <SelectTrigger className="flex-1">
+              <SelectValue placeholder={t('common.category') || 'Catégorie'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('common.all_categories')}</SelectItem>
+              {CATEGORIES.map(cat => (
+                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(searchQuery || selectedProject !== 'all' || selectedCategory !== 'all') && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedProject('all');
+                setSelectedCategory('all');
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-4 h-4 mr-2" /> {t('common.clear')}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Message Alert */}
@@ -252,14 +316,15 @@ export default function WorkersExpensesPage() {
             <div key={i} className="h-40 bg-gray-200 rounded-lg animate-pulse"></div>
           ))}
         </div>
-      ) : expenses.length === 0 ? (
+      ) : filteredExpenses.length === 0 ? (
         <Card className="erp-card text-center py-12">
           <Receipt className="w-12 h-12 text-gray-400 mx-auto mb-4" />
           <p className="text-muted-foreground">{t('common.no_data')}</p>
+          {searchQuery && <p className="text-sm text-muted-foreground mt-2">{t('common.no_results_found')}</p>}
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {expenses.map((expense, idx) => (
+          {filteredExpenses.map((expense, idx) => (
             <motion.div
               key={expense.id}
               initial={{ opacity: 0, y: 20 }}

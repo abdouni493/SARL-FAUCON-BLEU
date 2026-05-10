@@ -46,6 +46,7 @@ export function getPrintLabels(lang: 'ar' | 'fr') {
     unity: isAr ? 'الوحدة' : 'Unité',
     supplier: isAr ? 'المورد' : 'Fournisseur',
     createdBy: isAr ? 'أنشأه' : 'Créé par',
+    project: isAr ? 'المشروع' : 'Projet',
     noData: isAr ? 'لا توجد بيانات' : 'Aucune donnée',
   };
 }

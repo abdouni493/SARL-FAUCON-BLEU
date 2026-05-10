@@ -17,9 +17,6 @@ export default function CompanyLogo({
     lg: 'w-24 h-24',
   };
 
-  // Guard: Return null while loading to prevent placeholder flash
-  if (!logoUrl) return null;
-
   // Validate URL is a non-empty string
   const isValidUrl = typeof logoUrl === 'string' && logoUrl.trim().length > 0;
   const finalUrl = isValidUrl ? logoUrl : DEFAULT_LOGO;

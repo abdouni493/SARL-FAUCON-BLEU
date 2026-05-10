@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Eye, Edit, Trash2, Plus, Save, Loader } from 'lucide-react';
+import { Eye, Edit, Trash2, Plus, Save, Loader, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -58,6 +58,8 @@ export default function StorageManagementPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [storages, setStorages] = useState<Storage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('all');
   
   const [viewProduct, setViewProduct] = useState<Product | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -322,6 +324,12 @@ export default function StorageManagementPage() {
     }
   };
 
+  const filteredProducts = products.filter((p) => {
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = selectedCategory === 'all' || p.category_id === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
   return (
     <div className={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
       <div className="space-y-6">
@@ -335,6 +343,45 @@ export default function StorageManagementPage() {
         </Button>
       </div>
 
+      <div className="flex flex-col md:flex-row gap-4 mb-8">
+        <div className="relative flex-1">
+          <Input
+            placeholder={t('common.search_products') || 'Rechercher des produits...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={i18n.language === 'ar' ? 'pr-10' : 'pl-10'}
+          />
+          <Search className={`absolute top-2.5 h-5 w-5 text-muted-foreground ${i18n.language === 'ar' ? 'right-3' : 'left-3'}`} />
+        </div>
+        <div className="flex gap-2 min-w-[200px]">
+          <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+            <SelectTrigger>
+              <SelectValue placeholder={t('common.all_categories')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('common.all_categories')}</SelectItem>
+              {categories.map((cat) => (
+                <SelectItem key={cat.id} value={cat.id}>
+                  {cat.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(searchQuery || selectedCategory !== 'all') && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedCategory('all');
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-4 h-4 mr-2" /> {t('common.clear')}
+            </Button>
+          )}
+        </div>
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader className="w-8 h-8 animate-spin text-blue-600" />
@@ -345,7 +392,7 @@ export default function StorageManagementPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {products.map((p, i) => (
+          {filteredProducts.map((p, i) => (
             <motion.div
               key={p.id}
               initial={{ opacity: 0, y: 20 }}
@@ -363,7 +410,7 @@ export default function StorageManagementPage() {
                     <span className="font-bold text-lg text-foreground">{p.name}</span>
                   </div>
                   <span className="text-xs px-3 py-1.5 rounded-full font-bold uppercase tracking-tight bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200">
-                    {p.quantity} {p.unities?.symbol || p.unities?.name}
+                    {p.quantity} {p.unities?.name || ''}
                   </span>
                 </div>
                 

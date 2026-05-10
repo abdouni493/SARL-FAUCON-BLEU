@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Plus, Edit3, Trash2, CreditCard, Eye, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { FileText, Plus, Edit3, Trash2, CreditCard, Eye, AlertCircle, CheckCircle, Loader, Search, X } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 // ============================================================================
@@ -60,6 +60,7 @@ export default function DebtsPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Create Debt Form State
   const [showCreateDebt, setShowCreateDebt] = useState(false);
@@ -152,6 +153,12 @@ export default function DebtsPage() {
       setLoading(false);
     }
   };
+
+  const filteredDebts = debts.filter(d => 
+    d.supplier_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (d.description && d.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    d.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   // ==================== FILTERED BONS COMMANDES ====================
   const filteredBons = bonsCommandes.filter(b =>
@@ -455,18 +462,37 @@ export default function DebtsPage() {
           <Plus className="w-5 h-5" />
           {t('debt_management.add_new_debt')}
         </Button>
+
+        <div className="relative flex-1 max-w-md ml-auto">
+          <Input
+            placeholder={t('debt_management.search_placeholder') || 'Rechercher par Fournisseur, ID ou Description...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 h-10 shadow-sm border-slate-200 dark:border-slate-700"
+          />
+          <Search className="absolute left-3 top-2.5 h-5 w-5 text-muted-foreground" />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-2.5 hover:text-foreground transition-colors"
+            >
+              <X className="w-5 h-5 text-muted-foreground" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Debts Grid */}
-      {debts.length === 0 ? (
+      {filteredDebts.length === 0 ? (
         <div className="text-center p-12 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
           <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
           <p className="text-muted-foreground">{t('debt_management.no_debts') || 'No debts found'}</p>
+          {searchQuery && <p className="text-sm text-muted-foreground mt-2">{t('common.no_results_found')}</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           <AnimatePresence>
-            {debts.map((debt, index) => (
+            {filteredDebts.map((debt, index) => (
               <motion.div
                 key={debt.id}
                 initial={{ opacity: 0, y: 20 }}

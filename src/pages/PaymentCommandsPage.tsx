@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { CreditCard, Eye, Edit3, Trash2, CheckCircle, Printer, PlusCircle, Search, FileText, Shield, AlertCircle, BarChart3, Clock, HandCoins, Loader, Save } from 'lucide-react';
+import { CreditCard, Eye, Edit3, Trash2, CheckCircle, Printer, PlusCircle, Search, FileText, Shield, AlertCircle, BarChart3, Clock, HandCoins, Loader, Save, X } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface BonCommande {
   id: string;
@@ -70,7 +71,7 @@ const StatCard = ({ icon: Icon, label, value, gradient, delay, amount }: {
 );
 
 export default function PaymentCommandsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const { enterpriseSettings } = useData();
   const [paymentOrders, setPaymentOrders] = useState<PaymentOrder[]>([]);
@@ -87,6 +88,8 @@ export default function PaymentCommandsPage() {
   const [printMode, setPrintMode] = useState<'standard' | 'custom' | null>(null);
   const [pendingPrintPayment, setPendingPrintPayment] = useState<PaymentOrder | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState<'all' | 'pending' | 'validated'>('all');
   const printRef = useRef<HTMLDivElement>(null);
 
   // Create form
@@ -179,6 +182,13 @@ export default function PaymentCommandsPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const filteredPaymentOrders = paymentOrders.filter(po => {
+    const matchesSearch = po.id.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                         (po.note && po.note.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesStatus = selectedStatus === 'all' || po.status === selectedStatus;
+    return matchesSearch && matchesStatus;
+  });
 
   const filteredBons = bonsCommandes.filter(b =>
     b.id.toLowerCase().includes(searchBon.toLowerCase()) ||
@@ -366,7 +376,7 @@ export default function PaymentCommandsPage() {
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(`
-          <html dir="rtl"><head><title>Ø·Ø¨Ø§Ø¹Ø© Ø£Ù…Ø± Ø§Ù„Ø¯ÙØ¹</title>
+          <html dir="rtl"><head><title>Ø·Ø¨Ø§Ø¹Ø© Ø£Ù…Ø± Ø§Ù„Ø¯Ù Ø¹</title>
           <style>body{font-family:Cairo,sans-serif;padding:40px;color:${printColor};font-size:${printFontSize}px;${printBold ? 'font-weight:bold;' : ''}}
           .header{text-align:center;margin-bottom:30px;border-bottom:2px solid #ddd;padding-bottom:20px}
           .field{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}
@@ -378,13 +388,13 @@ export default function PaymentCommandsPage() {
     }
   };
 
-  const handlePrintPaymentOrder = (cmd: PaymentOrder, lang: 'ar' | 'fr') => {
+  const handlePrintPaymentOrder = (cmd: any, lang: 'ar' | 'fr') => {
     const L = getPrintLabels(lang);
     const statusLabel = cmd.status === 'pending' ? (L.isAr ? '\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631' : 'En attente') : (L.isAr ? '\u0645\u0635\u0627\u062f\u0642 \u0639\u0644\u064a\u0647' : 'Valid\u00e9');
     const body = `
       <div class="details-grid">
         <div class="detail-item"><h3>${L.isAr ? '\u0631\u0642\u0645 \u0627\u0644\u0623\u0645\u0631' : 'ID Ordre'}</h3><p>${cmd.id.substring(0, 12)}</p></div>
-        <div class="detail-item"><h3>${L.isAr ? '\u0631\u0642\u0645 \u0627\u0644\u0628\u0648\u0646' : 'Bon ID'}</h3><p>${cmd.bon_commande_id.substring(0, 12)}</p></div>
+        <div class="detail-item"><h3>${L.isAr ? '\u0631\u0642\u0645 \u0627\u0644\u0628\u0648\u0646' : 'Bon ID'}</h3><p>${cmd.bon_commande_id?.substring(0, 12) || 'N/A'}</p></div>
         <div class="detail-item"><h3>${L.date}</h3><p>${formatDateLocale(cmd.created_at, lang)}</p></div>
         <div class="detail-item"><h3>${L.status}</h3><p>${statusLabel}</p></div>
         <div class="detail-item"><h3>${L.amount}</h3><p>${cmd.total_price.toLocaleString()} DA</p></div>
@@ -509,12 +519,57 @@ export default function PaymentCommandsPage() {
         </div>
       </div>
 
+      {/* Filter Section */}
+      <div className="flex flex-col md:flex-row gap-4 mb-6 bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+        <div className="relative flex-1">
+          <Input
+            placeholder={t('payment_orders.search_placeholder') || 'Rechercher par ID ou Note...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
+          />
+          <Search className="absolute left-3 top-2.5 h-5 w-5 text-muted-foreground" />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-2.5 hover:text-foreground"
+            >
+              <X className="w-5 h-5 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Select value={selectedStatus} onValueChange={(v: any) => setSelectedStatus(v)}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder={t('common.status') || 'Statut'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('common.total')}</SelectItem>
+              <SelectItem value="pending">{t('common.pending')}</SelectItem>
+              <SelectItem value="validated">{t('common.validated')}</SelectItem>
+            </SelectContent>
+          </Select>
+          {(searchQuery || selectedStatus !== 'all') && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedStatus('all');
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-4 h-4 mr-2" /> {t('common.clear')}
+            </Button>
+          )}
+        </div>
+      </div>
+
       {/* Payment Orders Grid */}
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <Loader className="w-8 h-8 animate-spin text-blue-600" />
         </div>
-      ) : paymentOrders.length === 0 ? (
+      ) : filteredPaymentOrders.length === 0 ? (
         <motion.div 
           initial={{ opacity: 0 }} 
           animate={{ opacity: 1 }} 
@@ -522,11 +577,12 @@ export default function PaymentCommandsPage() {
         >
           <FileText className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground text-lg">{t('common.no_data')}</p>
+          {searchQuery && <p className="text-sm text-muted-foreground mt-2">{t('common.no_results_found')}</p>}
         </motion.div>
       ) : (
         <div className="grid gap-5 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
           <AnimatePresence>
-            {paymentOrders.map((cmd, idx) => (
+            {filteredPaymentOrders.map((cmd, idx) => (
               <motion.div
                 key={cmd.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -540,7 +596,7 @@ export default function PaymentCommandsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <h3 className="font-bold text-lg text-white truncate">{t('common.order_id_label')} {cmd.id.substring(0, 8)}</h3>
-                      <p className="text-sm text-blue-100 mt-1">{t('common.bon_label')} {cmd.bon_commande_id.substring(0, 12)}</p>
+                        <p className="text-xs text-blue-200 mt-1 font-semibold truncate">🏗️ {(cmd as any).project_name || 'N/A'}</p>
                     </div>
                     <Badge className={`${statusColors[cmd.status]} border text-xs`}>
                       {cmd.status === 'pending' ? t('common.pending') : t('common.validated')}
@@ -606,6 +662,7 @@ export default function PaymentCommandsPage() {
                             setEditCmd(cmd);
                             setEditPrice(String(cmd.total_price));
                             setEditNote(cmd.note || '');
+                            (cmd as any).project_name = (cmd as any)?.project_boxes?.name || (cmd as any)?.project_boxes?.[0]?.name || 'N/A';
                           }}
                         >
                           <Edit3 className="w-3.5 h-3.5" />
@@ -684,7 +741,7 @@ export default function PaymentCommandsPage() {
             {viewCmd && (
               <Button
                 className="btn-gradient gap-2"
-                onClick={() => handlePrintPaymentOrder(viewCmd)}
+                onClick={() => handlePrintPaymentOrder(viewCmd, i18n.language as 'ar' | 'fr')}
               >
                 <Printer className="w-4 h-4" /> Print
               </Button>

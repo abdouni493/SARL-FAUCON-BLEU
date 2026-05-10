@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, Edit, Trash2, Plus, Save, Loader, Printer, Package, BarChart3, AlertCircle, CheckCircle, X, Upload, Settings, ImagePlus } from 'lucide-react';
+import { Eye, Edit, Trash2, Plus, Save, Loader, Printer, Package, BarChart3, AlertCircle, CheckCircle, X, Upload, Settings, ImagePlus, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { getPrintLabels, buildPrintHTML, openPrintWindow, formatDateLocale } from '@/lib/printUtils';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,8 @@ interface BonCommande {
   purchase_validated?: boolean;
   comptable_validated?: boolean;
   admin_validated?: boolean;
+  project_id?: string;
+  project_name?: string;
 }
 
 interface BonProduct {
@@ -116,6 +118,7 @@ export default function BonsCommandesPage() {
   const [uploadingImage, setUploadingImage] = useState<number | null>(null);
   const [productCounts, setProductCounts] = useState<Record<string, number>>({}); // Track product counts per bon
   const [pendingPrintBon, setPendingPrintBon] = useState<BonCommande | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Form states
   const [formData, setFormData] = useState({
@@ -146,6 +149,7 @@ export default function BonsCommandesPage() {
         .from('bons_commandes')
         .select(`
           *,
+          project_boxes(name),
           bons_commandes_offers(supplier_name)
         `)
         .order('created_at', { ascending: false });
@@ -165,6 +169,7 @@ export default function BonsCommandesPage() {
         // If offers exist, use supplier_name from offers, otherwise use bon's supplier_name
         const enrichedData = (data || []).map(bon => ({
           ...bon,
+          project_name: bon.project_boxes?.name || 'N/A',
           supplier_name: bon.bons_commandes_offers && bon.bons_commandes_offers.length > 0
             ? bon.bons_commandes_offers[0].supplier_name
             : bon.supplier_name
@@ -662,6 +667,13 @@ export default function BonsCommandesPage() {
     totalValue: bonsCommandes.reduce((sum, b) => sum + (b.total_with_tva || 0), 0)
   };
 
+  const filteredBons = bonsCommandes.filter(bon => 
+    bon.bon_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (bon.supplier_name && bon.supplier_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (bon.project_name && bon.project_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    bon.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -683,6 +695,24 @@ export default function BonsCommandesPage() {
         <StatCard icon={Package} label={t('common.total_value')} value={`${stats.totalValue.toLocaleString()} ${t('common.payment_amount_currency')}`} gradient="btn-gradient" delay={0.25} />
       </div>
 
+      <div className="relative mb-6">
+        <Input
+          placeholder={t('bons.search_placeholder') || 'Rechercher par ID, Projet ou Fournisseur...'}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-10 h-11"
+        />
+        <Search className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-3 hover:text-foreground"
+          >
+            <X className="w-5 h-5 text-muted-foreground" />
+          </button>
+        )}
+      </div>
+
       {/* Message */}
       {message && (
         <motion.div
@@ -699,15 +729,16 @@ export default function BonsCommandesPage() {
         <div className="flex items-center justify-center h-64">
           <Loader className="w-8 h-8 animate-spin text-blue-600" />
         </div>
-      ) : bonsCommandes.length === 0 ? (
+      ) : filteredBons.length === 0 ? (
         <div className="text-center p-12 bg-slate-50 dark:bg-slate-800 rounded-lg">
           <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
           <p className="text-muted-foreground">No bons de commande found</p>
+          {searchQuery && <p className="text-sm mt-2">{t('common.no_results_found')}</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           <AnimatePresence>
-            {bonsCommandes.map((bon, idx) => (
+            {filteredBons.map((bon, idx) => (
               <motion.div
                 key={bon.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -722,6 +753,9 @@ export default function BonsCommandesPage() {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-bold text-lg text-white truncate">{bon.bon_id}</h3>
                       <p className="text-sm text-blue-100 mt-1 truncate">ID: {bon.id.substring(0, 8)}</p>
+                      {bon.project_name && bon.project_name !== 'N/A' && (
+                        <p className="text-xs text-blue-200 mt-1 font-semibold truncate">🏗️ {bon.project_name}</p>
+                      )}
                     </div>
                     <Badge className={getStatusColor(bon.status)} style={{ minWidth: 'fit-content' }}>
                       {bon.status}

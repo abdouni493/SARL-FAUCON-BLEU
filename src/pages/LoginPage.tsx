@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -9,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import CompanyLogo from '@/components/CompanyLogo';
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
@@ -25,6 +27,19 @@ export default function LoginPage() {
   const [showPassword, setShowPassword]       = useState(false);
   const [loading, setLoading]                 = useState(false);
   const [error, setError]                     = useState('');
+  const [enterprise, setEnterprise]           = useState<{ company_name: string; logo_url: string | null } | null>(null);
+
+  useEffect(() => {
+    const fetchEnterprise = async () => {
+      try {
+        const { data } = await supabase.from('enterprise_settings').select('company_name, logo_url').single();
+        if (data) setEnterprise(data);
+      } catch (err) {
+        console.debug('Branding fetch error:', err);
+      }
+    };
+    fetchEnterprise();
+  }, []);
 
   const isRtl = i18n.language === 'ar';
 
@@ -101,11 +116,13 @@ export default function LoginPage() {
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
             transition={{ type: 'spring', delay: 0.2 }}
-            className="inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-4 erp-gradient-bg"
+            className="inline-flex items-center justify-center mb-4 overflow-hidden shadow-2xl"
           >
-            <Building2 className="w-10 h-10 text-primary-foreground" />
+            <CompanyLogo logoUrl={enterprise?.logo_url} size="lg" />
           </motion.div>
-          <h1 className="text-3xl font-bold text-primary-foreground">{t('app_name')}</h1>
+          <h1 className="text-4xl font-extrabold text-white tracking-tight drop-shadow-lg">
+            {enterprise?.company_name || t('app_name')}
+          </h1>
           <button
             onClick={() => i18n.changeLanguage(isRtl ? 'fr' : 'ar')}
             className="mt-2 text-sm text-blue-300 hover:text-blue-100 transition-colors"
