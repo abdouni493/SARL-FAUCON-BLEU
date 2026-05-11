@@ -18,6 +18,10 @@ interface FormData {
   phone: string;
   email: string;
   description: string;
+  nis: string;
+  nif: string;
+  rc: string;
+  article: string;
 }
 
 export default function EntrepriseSettingsPage() {
@@ -28,10 +32,14 @@ export default function EntrepriseSettingsPage() {
     logo: null,
     logoUrl: enterpriseSettings.logoUrl || '',
     name: enterpriseSettings.name || '',
-    address: '',
-    phone: '',
-    email: '',
-    description: '',
+    address: enterpriseSettings.address || '',
+    phone: enterpriseSettings.phone || '',
+    email: enterpriseSettings.email || '',
+    description: enterpriseSettings.description || '',
+    nis: enterpriseSettings.nis || '',
+    nif: enterpriseSettings.nif || '',
+    rc: enterpriseSettings.rc || '',
+    article: enterpriseSettings.article || '',
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -51,7 +59,7 @@ export default function EntrepriseSettingsPage() {
       try {
         const { data, error } = await supabase
           .from('enterprise_settings')
-          .select('company_name, logo_url, address, phone, email')
+          .select('company_name, logo_url, address, phone, email, description, nis, nif, rc, article')
           .eq('created_by_id', user.id)
           .maybeSingle();
 
@@ -65,6 +73,10 @@ export default function EntrepriseSettingsPage() {
             phone: '',
             email: '',
             description: '',
+            nis: '',
+            nif: '',
+            rc: '',
+            article: '',
           });
         } else if (data) {
           setFormData({
@@ -75,6 +87,10 @@ export default function EntrepriseSettingsPage() {
             phone: data.phone || '',
             email: data.email || '',
             description: (data as any).description || '',
+            nis: (data as any).nis || '',
+            nif: (data as any).nif || '',
+            rc: (data as any).rc || '',
+            article: (data as any).article || '',
           });
           updateEnterpriseSettings({
             name: data.company_name || 'ERP System',
@@ -82,7 +98,11 @@ export default function EntrepriseSettingsPage() {
             address: data.address || '',
             phone: data.phone || '',
             email: data.email || '',
-            description: (data as any).description || ''
+            description: (data as any).description || '',
+            nis: (data as any).nis || '',
+            nif: (data as any).nif || '',
+            rc: (data as any).rc || '',
+            article: (data as any).article || ''
           });
         } else {
           setFormData({
@@ -93,6 +113,10 @@ export default function EntrepriseSettingsPage() {
             phone: '',
             email: '',
             description: '',
+            nis: '',
+            nif: '',
+            rc: '',
+            article: '',
           });
         }
       } catch (err) {
@@ -105,6 +129,10 @@ export default function EntrepriseSettingsPage() {
           phone: '',
           email: '',
           description: '',
+          nis: '',
+          nif: '',
+          rc: '',
+          article: '',
         });
       } finally {
         setIsLoading(false);
@@ -141,6 +169,10 @@ export default function EntrepriseSettingsPage() {
           phone: formData.phone,
           email: formData.email,
           description: formData.description,
+          nis: formData.nis,
+          nif: formData.nif,
+          rc: formData.rc,
+          article: formData.article,
         }, { onConflict: 'created_by_id' });
 
       if (error) {
@@ -153,7 +185,11 @@ export default function EntrepriseSettingsPage() {
           address: formData.address,
           phone: formData.phone,
           email: formData.email,
-          description: formData.description
+          description: formData.description,
+          nis: formData.nis,
+          nif: formData.nif,
+          rc: formData.rc,
+          article: formData.article,
         });
         
         await loadEnterpriseSettings(user.id);
@@ -289,6 +325,52 @@ export default function EntrepriseSettingsPage() {
                       className="border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 dark:focus:border-blue-400"
                     />
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Legal Identifiers Section */}
+            <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2">
+                <span className="w-1 h-4 bg-gradient-to-b from-blue-600 to-indigo-600 rounded" />
+                {t('settings.legal_identifiers') || 'Legal Identifiers'}
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">{t('settings.nis') || 'NIS'}</label>
+                  <Input 
+                    placeholder="NIS number" 
+                    value={formData.nis} 
+                    onChange={e => setFormData(prev => ({ ...prev, nis: e.target.value }))}
+                    className="border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 dark:focus:border-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">{t('settings.nif') || 'NIF'}</label>
+                  <Input 
+                    placeholder="NIF number" 
+                    value={formData.nif} 
+                    onChange={e => setFormData(prev => ({ ...prev, nif: e.target.value }))}
+                    className="border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 dark:focus:border-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">{t('settings.rc') || 'RC'}</label>
+                  <Input 
+                    placeholder="RC number" 
+                    value={formData.rc} 
+                    onChange={e => setFormData(prev => ({ ...prev, rc: e.target.value }))}
+                    className="border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 dark:focus:border-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">{t('settings.article') || 'Article'}</label>
+                  <Input 
+                    placeholder="Article number" 
+                    value={formData.article} 
+                    onChange={e => setFormData(prev => ({ ...prev, article: e.target.value }))}
+                    className="border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 dark:focus:border-blue-400"
+                  />
                 </div>
               </div>
             </div>

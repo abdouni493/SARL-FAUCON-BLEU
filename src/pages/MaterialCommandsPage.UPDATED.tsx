@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { generateNextId } from '@/lib/idUtils';
 
 interface ProductEntry {
   id?: string;
@@ -249,10 +250,11 @@ export default function MaterialCommandsPage() {
         setEditingCmdId(null);
       } else {
         // Create new command
+        const nextId = await generateNextId('material_commands', 'cmd');
         const { data: cmdData, error: cmdError } = await supabase
           .from('material_commands')
           .insert({
-            command_id: `CMD-${Date.now()}`,
+            command_id: nextId,
             status: 'pending',
             created_by_id: user?.id
           })

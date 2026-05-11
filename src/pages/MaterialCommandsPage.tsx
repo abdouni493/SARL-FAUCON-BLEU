@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { generateNextId } from '@/lib/idUtils';
 
 interface CommandProduct {
   id: string;
@@ -161,10 +162,11 @@ export default function MaterialCommandsPage() {
         setMessage('Command updated successfully!');
       } else {
         // Create new command
+        const nextId = await generateNextId('material_commands', 'cmd');
         const { data: cmdData, error: cmdError } = await supabase
           .from('material_commands')
           .insert({
-            command_id: `CMD-${Date.now()}`,
+            command_id: nextId,
             status: 'pending',
             created_by_id: user?.id
           })

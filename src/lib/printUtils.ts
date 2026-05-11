@@ -12,6 +12,10 @@ export interface PrintConfig {
     address?: string;
     phone?: string;
     logoUrl?: string;
+    nis?: string;
+    nif?: string;
+    rc?: string;
+    article?: string;
   };
 }
 
@@ -99,6 +103,12 @@ export function getHeaderHTML(config: PrintConfig) {
         <h1>${es?.name || 'ERP System'}</h1>
         <p><strong>${L.address}:</strong> ${es?.address || 'N/A'}</p>
         <p><strong>${L.phone}:</strong> ${es?.phone || 'N/A'}</p>
+        <div style="margin-top: 5px; font-size: 11px; color: #444; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+          ${es?.nis ? `<span><strong>NIS:</strong> ${es.nis}</span>` : ''}
+          ${es?.nif ? `<span><strong>NIF:</strong> ${es.nif}</span>` : ''}
+          ${es?.rc ? `<span><strong>RC:</strong> ${es.rc}</span>` : ''}
+          ${es?.article ? `<span><strong>Article:</strong> ${es.article}</span>` : ''}
+        </div>
       </div>
       ${es?.logoUrl ? `<img src="${es.logoUrl}" class="logo" />` : ''}
     </div>

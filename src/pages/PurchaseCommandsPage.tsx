@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { generateNextId } from '@/lib/idUtils';
 
 interface PurchaseCommand {
   id: string;
@@ -181,7 +182,7 @@ export default function PurchaseCommandsPage() {
       if (prodError) throw prodError;
 
       // Create new bon_commande with proper structure
-      const bonId = `BON-${Date.now()}`;
+      const bonId = await generateNextId('bons_commandes', 'bc', 'bon_id');
       const { data: bonData, error: bonError } = await supabase
         .from('bons_commandes')
         .insert({

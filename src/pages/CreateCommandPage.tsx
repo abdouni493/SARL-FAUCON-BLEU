@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { generateNextId } from '@/lib/idUtils';
 
 interface ProductEntry {
   name: string;
@@ -53,15 +54,19 @@ export default function CreateCommandPage() {
 
     if (cmdProducts.length === 0) return;
 
-    addCommand({
-      id: `CMD-${String(Date.now()).slice(-4)}`,
-      products: cmdProducts,
-      status: 'pending',
-      createdBy: user?.fullName || '',
-      createdAt: new Date().toISOString().split('T')[0],
-    });
+    const saveCmd = async () => {
+      const nextId = await generateNextId('material_commands', 'cmd');
+      addCommand({
+        id: nextId, // Using the formatted ID for both id and human readable if necessary, or keep UUID?
+        products: cmdProducts,
+        status: 'pending',
+        createdBy: user?.fullName || '',
+        createdAt: new Date().toISOString().split('T')[0],
+      });
+      navigate('/material-commands');
+    };
 
-    navigate('/material-commands');
+    saveCmd();
   };
 
   return (

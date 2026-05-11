@@ -782,7 +782,7 @@ export default function ProjectsManagementPage() {
                             <div className="flex items-center gap-3 flex-col sm:flex-row">
                               <span className="font-bold text-emerald-700 dark:text-emerald-300 text-lg">{v.amount.toLocaleString()} DA</span>
                               <button
-                                onClick={() => handlePrintPayment(v, historyProject, 'versement')}
+                                onClick={() => setPendingPrintPayment({ payment: v, project: historyProject, type: 'versement' })}
                                 className="px-3 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all text-sm flex items-center gap-1"
                               >
                                 <span>🖨️</span> {isRtl ? 'طباعة' : 'Imprimer'}
@@ -823,7 +823,7 @@ export default function ProjectsManagementPage() {
                             <div className="flex items-center gap-3 flex-col sm:flex-row">
                               <span className="font-bold text-red-700 dark:text-red-300 text-lg">{(e.amount || 0).toLocaleString()} DA</span>
                               <button
-                                onClick={() => handlePrintPayment(e, historyProject, 'expense')}
+                                onClick={() => setPendingPrintPayment({ payment: e, project: historyProject, type: 'expense' })}
                                 className="px-3 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all text-sm flex items-center gap-1"
                               >
                                 <span>🖨️</span> {isRtl ? 'طباعة' : 'Imprimer'}

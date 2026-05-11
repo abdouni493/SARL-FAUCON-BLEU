@@ -88,6 +88,10 @@ export interface EnterpriseSettings {
   phone: string;
   email: string;
   description: string;
+  nis?: string;
+  nif?: string;
+  rc?: string;
+  article?: string;
 }
 
 export interface Offer {
@@ -260,7 +264,11 @@ const initialEnterpriseSettings: EnterpriseSettings = {
   address: '',
   phone: '',
   email: '',
-  description: ''
+  description: '',
+  nis: '',
+  nif: '',
+  rc: '',
+  article: ''
 };
 
 export function DataProvider({ children }: { children: ReactNode }) {
@@ -361,7 +369,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
           address: data.address || '',
           phone: data.phone || '',
           email: data.email || '',
-          description: data.description || ''
+          description: data.description || '',
+          nis: data.nis || '',
+          nif: data.nif || '',
+          rc: data.rc || '',
+          article: data.article || ''
         });
       } else {
         // No row exists - set defaults (don't create, let user save first)
@@ -372,7 +384,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
           address: '',
           phone: '',
           email: '',
-          description: ''
+          description: '',
+          nis: '',
+          nif: '',
+          rc: '',
+          article: ''
         });
       }
     } catch (error) {
@@ -384,7 +400,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         address: '',
         phone: '',
         email: '',
-        description: ''
+        description: '',
+        nis: '',
+        nif: '',
+        rc: '',
+        article: ''
       });
     }
   };
@@ -415,13 +435,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
           filter: `created_by_id=eq.${user.id}`
         },
         (payload) => {
-          if (payload.new?.created_by_id === user.id) {
+          const newData = payload.new as any;
+          if (newData?.created_by_id === user.id) {
             setEnterpriseSettings({
-              name: payload.new.company_name || 'ERP System',
-              logoUrl: payload.new.logo_url || '',
-              address: payload.new.address || '',
-              phone: payload.new.phone || '',
-              email: payload.new.email || ''
+              name: newData.company_name || 'ERP System',
+              logoUrl: newData.logo_url || '',
+              address: newData.address || '',
+              phone: newData.phone || '',
+              email: newData.email || '',
+              description: newData.description || '',
+              nis: newData.nis || '',
+              nif: newData.nif || '',
+              rc: newData.rc || '',
+              article: newData.article || ''
             });
           }
         }

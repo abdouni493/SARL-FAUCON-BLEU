@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { generateNextId } from '@/lib/idUtils';
 
 interface SupabaseCommand {
   id: string;
@@ -248,7 +249,7 @@ export default function CommandsManagementPage() {
         const { data: { user } } = await supabase.auth.getUser();
         
         // Create purchase command in Supabase
-        const purchaseCommandId = `PC-${Date.now()}`;
+        const purchaseCommandId = await generateNextId('purchase_commands', 'pur');
         
         const { data: purchaseCmd, error: purchaseError } = await supabase
           .from('purchase_commands')

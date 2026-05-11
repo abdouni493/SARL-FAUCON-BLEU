@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { generateNextId } from '@/lib/idUtils';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -252,7 +253,7 @@ export default function PurchaseCommandsPage() {
       const purchaseCmd = commands.find(c => c.id === cmdId);
       if (!purchaseCmd) throw new Error('Purchase command not found');
 
-      const bonId = `BON-${Date.now()}`;
+      const bonId = await generateNextId('bons_commandes', 'bc', 'bon_id');
       const { data: bonData, error: bonError } = await supabase
         .from('bons_commandes')
         .insert({
@@ -374,6 +375,10 @@ export default function PurchaseCommandsPage() {
 
   const handleAddOfferRow = () => {
     setNewOffers([...newOffers, { supplier_name: '', image_url: '', notes: '' }]);
+  };
+
+  const handleRemoveOfferRow = (idx: number) => {
+    setNewOffers(newOffers.filter((_, i) => i !== idx));
   };
 
   const handleOfferChange = (idx: number, field: string, value: string) => {
@@ -866,7 +871,7 @@ export default function PurchaseCommandsPage() {
                             </SelectTrigger>
                             <SelectContent>
                               {suppliers.map(s => (
-                                <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                                <SelectItem key={s.id} value={s.name || s.id}>{s.name || "Unnamed Supplier"}</SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
