@@ -33,6 +33,7 @@ import EnterpriseExpensesPage from "./pages/EnterpriseExpensesPage";
 import DebtsPage from "./pages/DebtsPage";
 import AppointmentsPage from "./pages/AppointmentsPage";
 import BonsCommandesPage from "./pages/BonsCommandesPage";
+import BonsSortirPage from "./pages/BonsSortirPage";
 import BudgetPage from "./pages/BudgetPage";
 import ReceiveCommandsPage from "./pages/ReceiveCommandsPage";
 import FinanceProjectBoxPage from "./pages/FinanceProjectBoxPage";
@@ -69,6 +70,7 @@ function AppRoutes() {
         <Route path="/receive-products" element={<ReceiveProductsPage />} />
         <Route path="/create-product" element={<CreateProductPage />} />
         <Route path="/bons-commandes" element={<BonsCommandesPage />} />
+        <Route path="/bons-sortir" element={<BonsSortirPage />} />
         <Route path="/project-finance" element={<FinanceProjectBoxPage />} />
         <Route path="/payment-commands" element={<PaymentCommandsPage />} />
         <Route path="/create-payment" element={<PaymentCommandsPage />} />

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, Edit, Trash2, Plus, Save, Loader, Printer, Package, BarChart3, AlertCircle, CheckCircle, X, Upload, Settings, ImagePlus, Search } from 'lucide-react';
+import { Eye, Edit, Trash2, Plus, Save, Loader, Printer, Package, BarChart3, AlertCircle, CheckCircle, Clock, X, Upload, Settings, ImagePlus, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { getPrintLabels, buildPrintHTML, openPrintWindow, formatDateLocale } from '@/lib/printUtils';
 import { Button } from '@/components/ui/button';
@@ -650,6 +650,47 @@ export default function BonsCommandesPage() {
     }
   };
 
+  const handleValidateBon = async (bon: BonCommande) => {
+    const role = user?.role as string;
+    const columnMap: Record<string, string> = {
+      chef_projet: 'purchase_validated',
+      admin: 'admin_validated',
+      comptable: 'comptable_validated',
+    };
+    const col = columnMap[role];
+    if (!col) return;
+
+    try {
+      setValidatingBonId(bon.id);
+      await supabase
+        .from('bons_commandes')
+        .update({ [col]: true, updated_at: new Date().toISOString() })
+        .eq('id', bon.id);
+
+      // Refresh the bon to check if all three flags are now true
+      const { data: updated } = await supabase
+        .from('bons_commandes')
+        .select('purchase_validated, admin_validated, comptable_validated')
+        .eq('id', bon.id)
+        .single();
+
+      if (updated?.purchase_validated && updated?.admin_validated && updated?.comptable_validated) {
+        await supabase
+          .from('bons_commandes')
+          .update({ status: 'validated', updated_at: new Date().toISOString() })
+          .eq('id', bon.id);
+      }
+
+      setMessage('✅ Validation enregistrée avec succès!');
+      await fetchData();
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      setMessage(`❌ Erreur: ${err.message}`);
+    } finally {
+      setValidatingBonId(null);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-amber-100 text-amber-700';
@@ -809,10 +850,54 @@ export default function BonsCommandesPage() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Validation Badges */}
+                  <div className="px-6">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Validations</p>
+                    <div className="flex gap-2 flex-wrap">
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.purchase_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
+                        {bon.purchase_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                        Détecteur
+                      </span>
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.admin_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
+                        {bon.admin_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                        Admin
+                      </span>
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.comptable_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
+                        {bon.comptable_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                        Comptable
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Action Buttons - Improved layout */}
                 <div className="px-6 pb-4 pt-2 mt-auto space-y-2">
+                  {/* Valider button — shown conditionally per role */}
+                  {(() => {
+                    const role = user?.role as string;
+                    const validatedFlagMap: Record<string, boolean | undefined> = {
+                      chef_projet: bon.purchase_validated,
+                      admin: bon.admin_validated,
+                      comptable: bon.comptable_validated,
+                    };
+                    const canValidate = ['chef_projet', 'admin', 'comptable'].includes(role)
+                      && !validatedFlagMap[role]
+                      && !['validated', 'paid', 'finalized'].includes(bon.status);
+                    return canValidate ? (
+                      <Button
+                        size="sm"
+                        className="w-full bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
+                        onClick={() => handleValidateBon(bon)}
+                        disabled={validatingBonId === bon.id}
+                      >
+                        {validatingBonId === bon.id
+                          ? <Loader className="w-4 h-4 mr-2 animate-spin" />
+                          : <CheckCircle className="w-4 h-4 mr-2" />}
+                        Valider
+                      </Button>
+                    ) : null;
+                  })()}
                   <Button
                     size="sm"
                     className="w-full btn-gradient text-xs font-semibold"

@@ -22,7 +22,7 @@ const AVAILABLE_ROLES = [
 
 const roleTranslations: Record<string, string> = {
   'admin': 'Administration Générale',
-  'chef_projet': 'Chef de Projet',
+  'chef_projet': 'Détecteur des Projets',
   'storage': 'Stockage',
   'purchase': 'Achats',
   'gestionnaire': 'Gestionnaire',

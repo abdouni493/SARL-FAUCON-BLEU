@@ -8,7 +8,8 @@ import {
   Building2, Menu, X, ChevronLeft, ChevronRight, Globe, LogOut,
   LayoutDashboard, Package, PlusCircle, ShoppingCart, PackageCheck,
   Wallet, Receipt, Settings, Warehouse, ClipboardList, MessageSquare,
-  FileText, CreditCard, BarChart3, Users, Building, CalendarDays, HandCoins, Truck
+  FileText, CreditCard, BarChart3, Users, Building, CalendarDays, HandCoins, Truck,
+  ArrowUpFromLine
 } from 'lucide-react';
 import { Banknote } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,7 @@ const menusByRole: Record<UserRole, MenuItem[]> = {
     { label: 'nav.dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'nav.material_commands', icon: Package, path: '/material-commands' },
     { label: 'nav.purchase_commands', icon: ShoppingCart, path: '/purchase-commands' },
+    { label: 'nav.bons_commandes', icon: FileText, path: '/bons-commandes' },
     { label: 'nav.receive_commands', icon: PackageCheck, path: '/receive-commands' },
     { label: 'nav.project_expenses', icon: Receipt, path: '/project-expenses' },
     { label: 'nav.finance_box', icon: Wallet, path: '/finance-box' },
@@ -29,6 +31,7 @@ const menusByRole: Record<UserRole, MenuItem[]> = {
   storage: [
     { label: 'nav.dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'nav.storage_management', icon: Warehouse, path: '/storage-management' },
+    { label: 'nav.bons_sortir', icon: ArrowUpFromLine, path: '/bons-sortir' },
     { label: 'nav.commands_management', icon: ClipboardList, path: '/commands-management' },
     { label: 'nav.purchase_commands', icon: ShoppingCart, path: '/purchase-commands' },
     { label: 'nav.receive_products', icon: PackageCheck, path: '/receive-products' },

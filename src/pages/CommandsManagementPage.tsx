@@ -336,7 +336,7 @@ export default function CommandsManagementPage() {
       <table><thead><tr><th style="width:5%;">#</th><th style="width:35%;">${L.productName}</th><th style="width:20%;">${L.quantity}</th><th style="width:20%;">${L.price}</th><th style="width:20%;">${L.notes}</th></tr></thead><tbody>
       ${cmd.command_products?.map((p, idx) => `<tr><td style="text-align:center;font-weight:bold;">${idx+1}</td><td class="product-name">${p.product_name}</td><td style="text-align:center;font-weight:bold;">${p.quantity}</td><td>${p.price} DA</td><td>${p.note || '-'}</td></tr>`).join('') || ''}
       </tbody></table>`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة أمر المواد', fr: 'Document de Commande Matériel' }, enterpriseSettings }, body));
+    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'طلب مواد', fr: 'Demande de Matériel' }, enterpriseSettings }, body));
   };
 
   const verifiedCount = productVerifications.filter(pv => pv.exists === true && pv.selectedInventoryProduct).length;
