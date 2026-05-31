@@ -369,6 +369,9 @@ export default function BonsSortirPage() {
             .join('')}
         </tbody>
       </table>
+    `;
+
+    const customSignatures = `
       <div class="signatures-section">
         <div class="signature-box">
           <h4>${lang === 'ar' ? 'مسؤول المخزن' : 'Responsable Stock'}</h4>
@@ -376,7 +379,7 @@ export default function BonsSortirPage() {
           <div class="sign-label">${L.signature} / ${L.cachet}</div>
         </div>
         <div class="signature-box">
-          <h4>${lang === 'ar' ? 'مسؤول المشروع' : 'Détecteur de Projet'}</h4>
+          <h4>${lang === 'ar' ? 'مسؤول المشروع' : 'Responsable Projet'}</h4>
           <div class="sign-area"></div>
           <div class="sign-label">${L.signature} / ${L.cachet}</div>
         </div>
@@ -392,8 +395,11 @@ export default function BonsSortirPage() {
       buildPrintHTML(
         {
           lang,
-          docTitle: { ar: 'وصل خروج مواد', fr: 'Bon de Sortir Matériel' },
+          docTitle: { ar: 'بون دي سورتي مواد', fr: 'Bon de Sortir Matériel' },
+          docId: bon.bon_id,
+          docDate: formatDateLocale(bon.exit_date, lang),
           enterpriseSettings,
+          signaturesHTML: customSignatures,
         },
         body
       )

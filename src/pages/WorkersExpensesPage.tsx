@@ -213,8 +213,13 @@ export default function WorkersExpensesPage() {
         <div class="detail-item"><h3>${L.amount}</h3><p>${expense.amount.toLocaleString()} DA</p></div>
         ${expense.project_name ? `<div class="detail-item"><h3>${L.project || 'Project'}</h3><p>${expense.project_name}</p></div>` : ''}
       </div>
-      ${expense.notes ? `<div style="padding:15px;background:#f9fafb;border-radius:8px;margin-bottom:15px;"><strong>${L.notes}:</strong><br>${expense.notes}</div>` : ''}`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة نفقة عامل', fr: 'Document Dépense Travailleur' }, enterpriseSettings }, body));
+      ${expense.notes ? `<div class="notes-box"><strong>${L.notes}:</strong><br>${expense.notes}</div>` : ''}`;
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'نفقة عامل', fr: 'Dépense Travailleur' },
+      docDate: formatDateLocale(expense.expense_date, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   const filteredExpenses = expenses.filter(e => {

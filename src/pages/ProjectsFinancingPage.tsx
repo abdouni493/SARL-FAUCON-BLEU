@@ -173,7 +173,12 @@ export default function ProjectsFinancingPage() {
         <div class="detail-item"><h3>${L.description}</h3><p>${versement.description}</p></div>
         <div class="detail-item"><h3>${L.amount}</h3><p>${versement.amount.toLocaleString()} DA</p></div>
       </div>`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة تحويل مالي', fr: 'Document Versement Financier' }, enterpriseSettings }, body));
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'تحويل مالي', fr: 'Versement Financier' },
+      docDate: formatDateLocale(versement.date, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   // Filter versements by search query

@@ -513,8 +513,15 @@ export default function BonsCommandesPage() {
       }).join('')}
       <tr class="total-row"><td colspan="6"></td><td class="amount">${totalWithTva.toLocaleString()} DA</td></tr>
       </tbody></table>
-      ${bon.notes ? `<div style="padding:15px;background:#fef3c7;border-radius:8px;border-left:4px solid #f59e0b;margin-top:15px;"><strong>${L.notes}:</strong><br>${bon.notes}</div>` : ''}`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة بون دي كوموند', fr: 'Bon de Commande' }, enterpriseSettings }, body));
+      ${bon.notes ? `<div class="notes-box"><strong>${L.notes}:</strong><br>${bon.notes}</div>` : ''}`;
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'بون دي كوموند', fr: 'Bon de Commande' },
+      docId: bon.bon_id,
+      docDate: formatDateLocale(bon.created_at, lang),
+      createdBy: user?.email || undefined,
+      enterpriseSettings,
+    }, body));
   };
 
   const handleSaveBon = async () => {

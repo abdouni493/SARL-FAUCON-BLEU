@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { FileText, Plus, Edit3, Trash2, CreditCard, Search, AlertCircle, CheckCircle, Clock, Printer, Eye, BarChart3, HandCoins, TrendingUp } from 'lucide-react';
+import { buildPrintHTML, openPrintWindow, formatDateLocale } from '@/lib/printUtils';
 
 // ============================================================================
 // INTERFACES
@@ -238,258 +239,49 @@ export default function ComptableDebtManagementPage() {
 
   // ==================== PRINT FUNCTION ====================
   const handlePrintDebt = (debt: Debt) => {
-    const printWindow = window.open('', '', 'height=1000,width=1200');
-    if (!printWindow) return;
-
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Gestion des Dettes - ${debt.id}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body {
-            font-family: 'Arial', sans-serif;
-            background: white;
-            color: #333;
-            padding: 20px;
-          }
-          .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 3px solid #2563eb;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-          }
-          .company-info h1 {
-            font-size: 28px;
-            color: #1e40af;
-            margin-bottom: 5px;
-          }
-          .company-info p {
-            font-size: 12px;
-            color: #666;
-            margin: 3px 0;
-          }
-          .logo { width: 80px; height: 80px; border-radius: 8px; }
-          .title-section {
-            text-align: center;
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid #e5e7eb;
-          }
-          .title-section h2 {
-            font-size: 32px;
-            font-weight: bold;
-            color: #1e40af;
-            margin: 0;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          }
-          .title-section p {
-            font-size: 14px;
-            color: #666;
-            margin-top: 8px;
-          }
-          .debt-details {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            margin-bottom: 30px;
-            padding: 15px;
-            background: #f0f9ff;
-            border-radius: 8px;
-            border-left: 4px solid #2563eb;
-          }
-          .detail-item h3 {
-            font-size: 12px;
-            color: #666;
-            font-weight: bold;
-            margin-bottom: 5px;
-            text-transform: uppercase;
-          }
-          .detail-item p {
-            font-size: 16px;
-            font-weight: bold;
-            color: #1e40af;
-          }
-          .status-badge {
-            display: inline-block;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: bold;
-            font-size: 12px;
-            text-transform: uppercase;
-          }
-          .status-pending {
-            background: #fef3c7;
-            color: #b45309;
-          }
-          .status-partial {
-            background: #dbeafe;
-            color: #0c4a6e;
-          }
-          .status-paid {
-            background: #dcfce7;
-            color: #166534;
-          }
-          .info-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: #f9fafb;
-            border-radius: 8px;
-            border-left: 4px solid #2563eb;
-          }
-          .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 12px 0;
-            border-bottom: 1px solid #e5e7eb;
-          }
-          .info-row:last-child {
-            border-bottom: none;
-          }
-          .info-label {
-            font-weight: bold;
-            color: #1e40af;
-          }
-          .info-value {
-            color: #333;
-            font-weight: 600;
-          }
-          .amount-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: linear-gradient(135deg, #dbeafe 0%, #f0f9ff 100%);
-            border: 2px solid #2563eb;
-            border-radius: 8px;
-          }
-          .amount-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 15px 0;
-            font-size: 18px;
-            font-weight: bold;
-          }
-          .amount-row.grand {
-            border-top: 2px solid #2563eb;
-            padding-top: 15px;
-            color: #1e40af;
-            font-size: 22px;
-          }
-          .progress-bar {
-            width: 100%;
-            height: 10px;
-            background: #e5e7eb;
-            border-radius: 10px;
-            margin-top: 15px;
-            overflow: hidden;
-          }
-          .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #2563eb, #4f46e5);
-          }
-          .footer {
-            margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px solid #e5e7eb;
-            text-align: center;
-            color: #999;
-            font-size: 12px;
-          }
-          @media print {
-            body { padding: 10px; }
-            .header { page-break-after: avoid; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="company-info">
-            <h1>${enterpriseSettings?.name || 'ERP System'}</h1>
-            <p><strong>Address:</strong> ${enterpriseSettings?.address || 'N/A'}</p>
-            <p><strong>Phone:</strong> ${enterpriseSettings?.phone || 'N/A'}</p>
-            <p><strong>Email:</strong> ${enterpriseSettings?.email || 'N/A'}</p>
-          </div>
-          ${enterpriseSettings?.logoUrl ? `<img src="${enterpriseSettings.logoUrl}" class="logo" />` : ''}
+    const lang = 'fr' as const;
+    const statusLabel = debt.status === 'paid' ? 'Payé' : debt.status === 'partial' ? 'Partiel' : 'En attente';
+    const paidPct = debt.total_price > 0 ? ((debt.amount_paid / debt.total_price) * 100).toFixed(1) : '0';
+    const body = `
+      <div class="details-grid">
+        <div class="detail-item"><h3>ID Dette</h3><p>${debt.id.substring(0, 12)}</p></div>
+        <div class="detail-item"><h3>Fournisseur</h3><p>${debt.supplier_name}</p></div>
+        <div class="detail-item"><h3>Statut</h3><p>${statusLabel}</p></div>
+        <div class="detail-item"><h3>Bon de Commande</h3><p>${debt.bon_commande_id}</p></div>
+        <div class="detail-item"><h3>Date de Création</h3><p>${formatDateLocale(debt.created_at, lang)}</p></div>
+        ${debt.due_date ? `<div class="detail-item"><h3>Date d'échéance</h3><p>${formatDateLocale(debt.due_date, lang)}</p></div>` : ''}
+        ${debt.description ? `<div class="detail-item"><h3>Description</h3><p>${debt.description}</p></div>` : ''}
+      </div>
+      <div class="finance-summary">
+        <div class="summary-card total">
+          <h4>Montant Total</h4>
+          <p>${debt.total_price.toLocaleString()} DA</p>
         </div>
-
-        <div class="title-section">
-          <h2>Gestion des Dettes</h2>
-          <p>Debt Management Document</p>
+        <div class="summary-card paid">
+          <h4>Montant Payé</h4>
+          <p>${debt.amount_paid.toLocaleString()} DA</p>
         </div>
-
-        <div class="debt-details">
-          <div class="detail-item">
-            <h3>Debt ID</h3>
-            <p>${debt.id.substring(0, 12)}</p>
-          </div>
-          <div class="detail-item">
-            <h3>Supplier</h3>
-            <p>${debt.supplier_name}</p>
-          </div>
-          <div class="detail-item">
-            <h3>Status</h3>
-            <span class="status-badge status-${debt.status}">
-              ${debt.status.charAt(0).toUpperCase() + debt.status.slice(1)}
-            </span>
-          </div>
+        <div class="summary-card remaining">
+          <h4>Solde Restant</h4>
+          <p>${debt.remaining_balance.toLocaleString()} DA</p>
         </div>
-
-        <div class="info-section">
-          <div class="info-row">
-            <span class="info-label">Bon de Commande ID:</span>
-            <span class="info-value">${debt.bon_commande_id}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Creation Date:</span>
-            <span class="info-value">${new Date(debt.created_at).toLocaleDateString()}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Description:</span>
-            <span class="info-value">${debt.description || 'N/A'}</span>
-          </div>
+      </div>
+      <div style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;padding:14px 16px;font-size:12px;color:#475569;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+          <span>Progression du paiement</span><span style="font-weight:700;color:#1e3a8a;">${paidPct}% payé</span>
         </div>
-
-        <div class="amount-section">
-          <div class="amount-row">
-            <span>Total Amount:</span>
-            <span>${debt.total_price.toLocaleString()} DA</span>
-          </div>
-          <div class="amount-row">
-            <span>Amount Paid:</span>
-            <span style="color: #16a34a;">${debt.amount_paid.toLocaleString()} DA</span>
-          </div>
-          <div class="amount-row">
-            <span>Remaining Balance:</span>
-            <span style="color: #dc2626;">${debt.remaining_balance.toLocaleString()} DA</span>
-          </div>
-          <div class="amount-row grand">
-            <span>Total Outstanding:</span>
-            <span>${debt.remaining_balance.toLocaleString()} DA</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" style="width: ${(debt.amount_paid / debt.total_price) * 100}%"></div>
-          </div>
-          <p style="text-align: right; margin-top: 10px; font-size: 12px; color: #666;">
-            ${((debt.amount_paid / debt.total_price) * 100).toFixed(2)}% Paid
-          </p>
+        <div style="width:100%;height:10px;background:#e2e8f0;border-radius:10px;overflow:hidden;">
+          <div style="height:100%;width:${paidPct}%;background:linear-gradient(90deg,#1e3a8a,#3730a3);border-radius:10px;"></div>
         </div>
-
-        <div class="footer">
-          <p>Generated on ${new Date().toLocaleString()}</p>
-          <p>&copy; ${new Date().getFullYear()} ${enterpriseSettings?.name || 'ERP System'}. All rights reserved.</p>
-        </div>
-      </body>
-      </html>
+      </div>
     `;
-
-    printWindow.document.write(html);
-    printWindow.document.close();
-    setTimeout(() => { printWindow.print(); }, 250);
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'إدارة الديون', fr: 'Gestion des Dettes' },
+      docId: debt.id.substring(0, 12),
+      docDate: formatDateLocale(debt.created_at, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   const handleEditDebt = async () => {

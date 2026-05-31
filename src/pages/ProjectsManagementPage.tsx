@@ -392,7 +392,15 @@ export default function ProjectsManagementPage() {
         <div class="detail-item"><h3>${L.isAr ? 'النوع' : 'Type'}</h3><p>${typeLabel}</p></div>
         <div class="detail-item"><h3>${L.amount}</h3><p>${amount.toLocaleString()} DA</p></div>
       </div>`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: type === 'versement' ? 'وثيقة تحويل مالي' : 'وثيقة نفقة', fr: type === 'versement' ? 'Document Versement' : 'Document Dépense' }, enterpriseSettings }, body));
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: {
+        ar: type === 'versement' ? 'تحويل مالي' : 'نفقة مشروع',
+        fr: type === 'versement' ? 'Versement' : 'Dépense Projet',
+      },
+      docDate: formatDateLocale(date, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   // Filter projects

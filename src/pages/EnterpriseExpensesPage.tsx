@@ -198,8 +198,13 @@ export default function EnterpriseExpensesPage() {
         <div class="detail-item"><h3>${L.date}</h3><p>${formatDateLocale(expense.expense_date, lang)}</p></div>
         <div class="detail-item"><h3>${L.amount}</h3><p>${expense.amount.toLocaleString()} DA</p></div>
       </div>
-      ${expense.notes ? `<div style="padding:15px;background:#f9fafb;border-radius:8px;margin-bottom:15px;"><strong>${L.notes}:</strong><br>${expense.notes}</div>` : ''}`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة نفقة المؤسسة', fr: 'Document Dépense Entreprise' }, enterpriseSettings }, body));
+      ${expense.notes ? `<div class="notes-box"><strong>${L.notes}:</strong><br>${expense.notes}</div>` : ''}`;
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'نفقة المؤسسة', fr: 'Dépense Entreprise' },
+      docDate: formatDateLocale(expense.expense_date, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0);

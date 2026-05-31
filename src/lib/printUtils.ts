@@ -1,16 +1,21 @@
 /**
  * Shared bilingual print utility for all ERP pages.
- * Generates professional print templates with Arabic RTL / French LTR support,
- * company branding, and cachet/signature sections.
+ * Layout: title → line → company/logo/creator info → line → body content → signatures → footer
  */
 
 export interface PrintConfig {
   lang: 'ar' | 'fr';
   docTitle: { ar: string; fr: string };
+  createdBy?: string;
+  docId?: string;
+  docDate?: string;
+  /** Pass custom HTML to override the default 3-box signature section */
+  signaturesHTML?: string;
   enterpriseSettings?: {
     name?: string;
     address?: string;
     phone?: string;
+    email?: string;
     logoUrl?: string;
     nis?: string;
     nif?: string;
@@ -52,78 +57,251 @@ export function getPrintLabels(lang: 'ar' | 'fr') {
     createdBy: isAr ? 'أنشأه' : 'Créé par',
     project: isAr ? 'المشروع' : 'Projet',
     noData: isAr ? 'لا توجد بيانات' : 'Aucune donnée',
+    docNumber: isAr ? 'رقم الوثيقة' : 'N° Document',
+    printedOn: isAr ? 'طُبع بتاريخ' : 'Imprimé le',
   };
 }
 
 export function getPrintStyles(lang: 'ar' | 'fr') {
   const { isAr, dir, fontFamily } = getPrintLabels(lang);
+  const side = isAr ? 'right' : 'left';
   return `
     * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family:${fontFamily}; background:#fff; color:#333; padding:30px; direction:${dir}; }
-    .header { display:flex; justify-content:space-between; align-items:center; border-bottom:3px solid #2563eb; padding-bottom:20px; margin-bottom:10px; }
-    .company-info h1 { font-size:26px; color:#1e40af; margin-bottom:5px; }
-    .company-info p { font-size:12px; color:#666; margin:3px 0; }
-    .doc-title { text-align:center; font-size:20px; font-weight:bold; color:#1e40af; margin:15px 0; padding:8px; background:#f0f9ff; border-radius:6px; border:1px solid #bfdbfe; }
-    .logo { width:60px; height:60px; border-radius:8px; object-fit:cover; }
-    .details-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-bottom:20px; padding:15px; background:#f0f9ff; border-radius:8px; border-${isAr?'right':'left'}:4px solid #2563eb; }
-    .details-grid-2 { display:grid; grid-template-columns:repeat(2,1fr); gap:20px; margin-bottom:20px; padding:15px; background:#f0f9ff; border-radius:8px; border-${isAr?'right':'left'}:4px solid #2563eb; }
-    .detail-item h3 { font-size:11px; color:#666; font-weight:bold; margin-bottom:5px; text-transform:uppercase; }
-    .detail-item p { font-size:14px; font-weight:bold; color:#1e40af; }
-    .section-title { color:#1e40af; margin-bottom:10px; font-size:16px; font-weight:bold; }
-    table { width:100%; border-collapse:collapse; margin-top:10px; margin-bottom:15px; }
-    th { background:linear-gradient(135deg,#2563eb 0%,#4f46e5 100%); color:#fff; padding:10px 12px; text-align:${isAr?'right':'left'}; font-weight:bold; font-size:12px; }
-    td { padding:10px 12px; border-bottom:1px solid #e5e7eb; font-size:12px; }
-    tr:nth-child(even) { background:#f9fafb; }
-    .product-name { font-weight:bold; color:#1e40af; }
-    .amount { font-weight:bold; color:#1e40af; }
-    .total-row { background:#f0f9ff !important; font-weight:bold; }
-    .signatures-section { display:grid; grid-template-columns:repeat(3,1fr); gap:30px; margin-top:60px; padding-top:20px; }
-    .signature-box { text-align:center; padding:15px; border:1px dashed #cbd5e1; border-radius:8px; min-height:120px; display:flex; flex-direction:column; justify-content:space-between; }
-    .signature-box h4 { font-size:13px; color:#1e40af; font-weight:bold; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid #e2e8f0; }
-    .signature-box .sign-area { flex:1; min-height:60px; }
-    .signature-box .sign-label { font-size:10px; color:#94a3b8; margin-top:8px; padding-top:8px; border-top:1px solid #e2e8f0; }
-    .footer { margin-top:40px; padding-top:15px; border-top:1px solid #e5e7eb; text-align:center; color:#999; font-size:11px; }
-    .finance-summary { display:grid; grid-template-columns:repeat(3,1fr); gap:15px; margin-bottom:25px; }
-    .summary-card { padding:15px; border-radius:8px; border:2px solid #e5e7eb; text-align:center; }
-    .summary-card.total { background:#f0f9ff; border-color:#2563eb; } .summary-card.total p { color:#1e40af; }
-    .summary-card.paid { background:#f0fdf4; border-color:#16a34a; } .summary-card.paid p { color:#16a34a; }
-    .summary-card.remaining { background:#fef3c7; border-color:#f59e0b; } .summary-card.remaining p { color:#d97706; }
-    .summary-card h4 { font-size:11px; color:#666; text-transform:uppercase; margin-bottom:8px; }
-    .summary-card p { font-size:18px; font-weight:bold; }
-    @media print { body{padding:15px;} .header{page-break-after:avoid;} .signatures-section{page-break-inside:avoid;} }
+    body { font-family:${fontFamily}; background:#fff; color:#1e293b; padding:24px 32px; direction:${dir}; font-size:13px; line-height:1.5; }
+
+    /* ── DOCUMENT TITLE BAR ─────────────────────────────────── */
+    .doc-title-bar { text-align:center; padding:14px 0 10px; }
+    .doc-title-bar h1 {
+      font-size:26px; font-weight:900; color:#1e3a8a;
+      letter-spacing:2px; text-transform:uppercase; margin:0;
+    }
+
+    /* ── DIVIDERS ────────────────────────────────────────────── */
+    .title-divider {
+      border:none; border-top:3px solid #1e3a8a; margin:10px 0 14px;
+    }
+    .header-divider {
+      border:none; border-top:1.5px solid #cbd5e1; margin:14px 0 18px;
+    }
+
+    /* ── HEADER (logo | company | doc meta) ──────────────────── */
+    .header {
+      display:grid;
+      grid-template-columns:90px 1fr auto;
+      gap:24px;
+      align-items:center;
+      padding:6px 0;
+    }
+    .header-logo img {
+      width:80px; height:80px; object-fit:contain;
+      border-radius:8px; border:1px solid #e2e8f0;
+    }
+    .header-logo .no-logo {
+      width:80px; height:80px; background:#eff6ff;
+      border-radius:8px; border:2px dashed #93c5fd;
+      display:flex; align-items:center; justify-content:center;
+      font-size:10px; color:#60a5fa; font-weight:700;
+    }
+    .company-info { text-align:center; }
+    .company-info h2 { font-size:17px; font-weight:800; color:#1e3a8a; margin-bottom:5px; }
+    .company-info .company-contact { font-size:11px; color:#64748b; margin-bottom:6px; }
+    .company-info .company-contact div { margin:2px 0; }
+    .company-meta {
+      display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin-top:6px;
+    }
+    .company-meta span {
+      font-size:10px; color:#475569; background:#f1f5f9;
+      padding:2px 8px; border-radius:20px; border:1px solid #e2e8f0;
+    }
+    .doc-meta { text-align:${isAr ? 'left' : 'right'}; font-size:11px; color:#475569; white-space:nowrap; }
+    .doc-meta .doc-meta-row { margin-bottom:5px; }
+    .doc-meta .doc-meta-row .label { color:#94a3b8; }
+    .doc-meta .doc-meta-row .value { font-weight:700; color:#1e3a8a; margin-${side}:4px; }
+
+    /* ── DETAILS GRID ────────────────────────────────────────── */
+    .details-grid {
+      display:grid; grid-template-columns:repeat(3,1fr); gap:12px;
+      margin-bottom:18px; padding:14px 16px;
+      background:#f8fafc; border-radius:8px;
+      border:1px solid #e2e8f0; border-${side}:4px solid #1e3a8a;
+    }
+    .details-grid-2 {
+      display:grid; grid-template-columns:repeat(2,1fr); gap:12px;
+      margin-bottom:18px; padding:14px 16px;
+      background:#f8fafc; border-radius:8px;
+      border:1px solid #e2e8f0; border-${side}:4px solid #1e3a8a;
+    }
+    .detail-item h3 {
+      font-size:9px; color:#94a3b8; font-weight:700;
+      margin-bottom:4px; text-transform:uppercase; letter-spacing:0.6px;
+    }
+    .detail-item p { font-size:14px; font-weight:700; color:#1e3a8a; }
+
+    /* ── SECTION TITLE ───────────────────────────────────────── */
+    .section-title {
+      display:flex; align-items:center; gap:10px;
+      color:#1e3a8a; margin:18px 0 10px;
+      font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.6px;
+    }
+    .section-title::after {
+      content:''; flex:1; height:2px;
+      background:linear-gradient(to ${isAr ? 'left' : 'right'}, #1e3a8a 0%, #e0e7ff 100%);
+    }
+
+    /* ── TABLE ───────────────────────────────────────────────── */
+    table {
+      width:100%; border-collapse:collapse;
+      margin-bottom:16px;
+      border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;
+    }
+    thead tr { background:linear-gradient(135deg,#1e3a8a 0%,#3730a3 100%); }
+    th {
+      color:#fff; padding:10px 12px;
+      text-align:${isAr ? 'right' : 'left'};
+      font-weight:700; font-size:11px;
+      text-transform:uppercase; letter-spacing:0.5px; border:none;
+    }
+    td {
+      padding:9px 12px; border-bottom:1px solid #f1f5f9;
+      font-size:12px; color:#334155;
+    }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr:nth-child(even) { background:#f8fafc; }
+    .product-name { font-weight:700; color:#1e3a8a; }
+    .amount { font-weight:700; color:#1e3a8a; }
+    .total-row { background:#eff6ff !important; }
+    .total-row td {
+      border-top:2px solid #1e3a8a !important;
+      color:#1e3a8a; font-weight:800; font-size:13px;
+    }
+
+    /* ── NOTES BOX ───────────────────────────────────────────── */
+    .notes-box {
+      padding:12px 16px; background:#fffbeb; border-radius:8px;
+      border:1px solid #fcd34d; border-${side}:4px solid #f59e0b;
+      margin-top:14px; font-size:12px; color:#78350f;
+    }
+
+    /* ── FINANCIAL SUMMARY ───────────────────────────────────── */
+    .finance-summary { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
+    .summary-card { padding:14px; border-radius:8px; border:1.5px solid #e2e8f0; text-align:center; }
+    .summary-card.total { background:#eff6ff; border-color:#1e3a8a; }
+    .summary-card.total p { color:#1e3a8a; }
+    .summary-card.paid { background:#f0fdf4; border-color:#16a34a; }
+    .summary-card.paid p { color:#16a34a; }
+    .summary-card.remaining { background:#fef3c7; border-color:#f59e0b; }
+    .summary-card.remaining p { color:#d97706; }
+    .summary-card h4 { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+    .summary-card p { font-size:20px; font-weight:800; }
+
+    /* ── SIGNATURES ──────────────────────────────────────────── */
+    .signatures-section {
+      display:grid; grid-template-columns:repeat(3,1fr); gap:20px;
+      margin-top:48px; padding-top:16px; border-top:1.5px solid #e2e8f0;
+    }
+    .signature-box {
+      text-align:center; padding:14px;
+      border:1.5px dashed #cbd5e1; border-radius:8px;
+      min-height:110px; display:flex; flex-direction:column;
+    }
+    .signature-box h4 {
+      font-size:12px; color:#1e3a8a; font-weight:700;
+      margin-bottom:6px; padding-bottom:6px; border-bottom:1px solid #e2e8f0;
+    }
+    .sign-area { flex:1; min-height:55px; }
+    .sign-label {
+      font-size:9px; color:#94a3b8;
+      margin-top:6px; padding-top:6px; border-top:1px solid #f1f5f9;
+      text-transform:uppercase; letter-spacing:0.5px;
+    }
+
+    /* ── FOOTER ──────────────────────────────────────────────── */
+    .footer {
+      margin-top:32px; padding-top:12px;
+      border-top:1px solid #e2e8f0;
+      text-align:center; color:#94a3b8; font-size:10px; line-height:2;
+    }
+
+    /* ── PRINT MEDIA ─────────────────────────────────────────── */
+    @media print {
+      body { padding:10px 16px; }
+      .signatures-section { page-break-inside:avoid; }
+      table { page-break-inside:auto; }
+      tr { page-break-inside:avoid; }
+      thead { display:table-header-group; }
+    }
   `;
 }
 
 export function getHeaderHTML(config: PrintConfig) {
   const L = getPrintLabels(config.lang);
   const es = config.enterpriseSettings;
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(L.isAr ? 'ar-DZ' : 'fr-FR');
+  const timeStr = now.toLocaleTimeString(L.isAr ? 'ar-DZ' : 'fr-FR', { hour: '2-digit', minute: '2-digit' });
+
   return `
+    <!-- ─── DOCUMENT TITLE ─────────────────────────────────── -->
+    <div class="doc-title-bar">
+      <h1>${config.docTitle[config.lang]}</h1>
+    </div>
+    <hr class="title-divider" />
+
+    <!-- ─── HEADER: logo | company | doc meta ─────────────── -->
     <div class="header">
+      <div class="header-logo">
+        ${es?.logoUrl
+          ? `<img src="${es.logoUrl}" alt="Logo" />`
+          : `<div class="no-logo">LOGO</div>`}
+      </div>
+
       <div class="company-info">
-        <h1>${es?.name || 'ERP System'}</h1>
-        <p><strong>${L.address}:</strong> ${es?.address || 'N/A'}</p>
-        <p><strong>${L.phone}:</strong> ${es?.phone || 'N/A'}</p>
-        <div style="margin-top: 5px; font-size: 11px; color: #444; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+        <h2>${es?.name || 'ERP System'}</h2>
+        <div class="company-contact">
+          ${es?.address ? `<div>${L.address}: ${es.address}</div>` : ''}
+          ${es?.phone ? `<div>${L.phone}: ${es.phone}</div>` : ''}
+          ${es?.email ? `<div>Email: ${es.email}</div>` : ''}
+        </div>
+        <div class="company-meta">
           ${es?.nis ? `<span><strong>NIS:</strong> ${es.nis}</span>` : ''}
           ${es?.nif ? `<span><strong>NIF:</strong> ${es.nif}</span>` : ''}
           ${es?.rc ? `<span><strong>RC:</strong> ${es.rc}</span>` : ''}
-          ${es?.article ? `<span><strong>Article:</strong> ${es.article}</span>` : ''}
+          ${es?.article ? `<span><strong>Art:</strong> ${es.article}</span>` : ''}
         </div>
       </div>
-      ${es?.logoUrl ? `<img src="${es.logoUrl}" class="logo" />` : ''}
+
+      <div class="doc-meta">
+        ${config.docId ? `<div class="doc-meta-row"><span class="label">${L.docNumber}:</span><span class="value">${config.docId}</span></div>` : ''}
+        ${config.docDate ? `<div class="doc-meta-row"><span class="label">${L.date}:</span><span class="value">${config.docDate}</span></div>` : ''}
+        ${config.createdBy ? `<div class="doc-meta-row"><span class="label">${L.createdBy}:</span><span class="value">${config.createdBy}</span></div>` : ''}
+        <div class="doc-meta-row"><span class="label">${L.printedOn}:</span><span class="value">${dateStr} ${timeStr}</span></div>
+      </div>
     </div>
-    <div class="doc-title">${config.docTitle[config.lang]}</div>
+
+    <hr class="header-divider" />
   `;
 }
 
 export function getSignaturesHTML(lang: 'ar' | 'fr', thirdLabel?: string) {
   const L = getPrintLabels(lang);
-  const third = thirdLabel || L.date;
+  const third = thirdLabel || L.receivedBy;
   return `
     <div class="signatures-section">
-      <div class="signature-box"><h4>${L.preparedBy}</h4><div class="sign-area"></div><div class="sign-label">${L.cachet} / ${L.signature}</div></div>
-      <div class="signature-box"><h4>${L.approvedBy}</h4><div class="sign-area"></div><div class="sign-label">${L.cachet} / ${L.signature}</div></div>
-      <div class="signature-box"><h4>${third}</h4><div class="sign-area"></div><div class="sign-label">${L.cachet} / ${L.signature}</div></div>
+      <div class="signature-box">
+        <h4>${L.preparedBy}</h4>
+        <div class="sign-area"></div>
+        <div class="sign-label">${L.cachet} / ${L.signature}</div>
+      </div>
+      <div class="signature-box">
+        <h4>${L.approvedBy}</h4>
+        <div class="sign-area"></div>
+        <div class="sign-label">${L.cachet} / ${L.signature}</div>
+      </div>
+      <div class="signature-box">
+        <h4>${third}</h4>
+        <div class="sign-area"></div>
+        <div class="sign-label">${L.cachet} / ${L.signature}</div>
+      </div>
     </div>
   `;
 }
@@ -132,8 +310,8 @@ export function getFooterHTML(lang: 'ar' | 'fr', companyName?: string) {
   const L = getPrintLabels(lang);
   return `
     <div class="footer">
-      <p>${L.generatedOn} ${new Date().toLocaleString(L.isAr ? 'ar-DZ' : 'fr-FR')}</p>
-      <p>&copy; ${new Date().getFullYear()} ${companyName || 'ERP System'}. ${L.allRights}.</p>
+      <div>${L.generatedOn}: ${new Date().toLocaleString(L.isAr ? 'ar-DZ' : 'fr-FR')}</div>
+      <div>&copy; ${new Date().getFullYear()} ${companyName || 'ERP System'} &mdash; ${L.allRights}</div>
     </div>
   `;
 }
@@ -148,6 +326,9 @@ export function openPrintWindow(html: string) {
 
 export function buildPrintHTML(config: PrintConfig, bodyContent: string) {
   const L = getPrintLabels(config.lang);
+  const signatures = config.signaturesHTML !== undefined
+    ? config.signaturesHTML
+    : getSignaturesHTML(config.lang);
   return `<!DOCTYPE html><html dir="${L.dir}" lang="${config.lang}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${config.docTitle[config.lang]}</title>
@@ -156,7 +337,7 @@ ${L.isAr ? '<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@40
 </head><body>
 ${getHeaderHTML(config)}
 ${bodyContent}
-${getSignaturesHTML(config.lang)}
+${signatures}
 ${getFooterHTML(config.lang, config.enterpriseSettings?.name)}
 </body></html>`;
 }

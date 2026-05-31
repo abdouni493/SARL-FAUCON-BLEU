@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { getPrintLabels, buildPrintHTML, openPrintWindow, formatDateLocale, getSignaturesHTML } from '@/lib/printUtils';
 
 interface CommandProduct {
   id: string;
@@ -220,183 +221,45 @@ export default function ReceiveCommandsPage() {
   };
 
   const handlePrint = (cmd: ReceiveCommand, lang: 'ar' | 'fr') => {
-    const printWindow = window.open('', '', 'height=1000,width=1200');
-    if (!printWindow) return;
+    const L = getPrintLabels(lang);
 
-    const isAr = lang === 'ar';
-    const dir = isAr ? 'rtl' : 'ltr';
-    const fontFamily = isAr ? "'Tajawal', 'Arial', sans-serif" : "'Arial', sans-serif";
-    const labels = isAr ? {
-      docTitle: 'وثيقة الاستقبال',
-      receptionId: 'معرف الاستقبال',
-      status: 'الحالة',
-      date: 'التاريخ',
-      address: 'العنوان',
-      phone: 'الهاتف',
-      supplier: 'المورد',
-      productsList: 'المنتجات المستقبلة',
-      productName: 'اسم المنتج',
-      quantity: 'الكمية',
-      totalQuantity: 'الكمية الإجمالية',
-      totalPrice: 'السعر الإجمالي',
-      noProducts: 'لا توجد منتجات',
-      cachet: 'الختم',
-      signature: 'التوقيع',
-      preparedBy: 'أعدّ من طرف',
-      approvedBy: 'صادق عليه',
-      receivedBy: 'استلمه',
-      generatedOn: 'تم الإنشاء بتاريخ',
-      allRights: 'جميع الحقوق محفوظة'
-    } : {
-      docTitle: 'Document de Réception',
-      receptionId: 'ID de Réception',
-      status: 'Statut',
-      date: 'Date',
-      address: 'Adresse',
-      phone: 'Téléphone',
-      supplier: 'Fournisseur',
-      productsList: 'Produits Reçus',
-      productName: 'Nom du Produit',
-      quantity: 'Quantité',
-      totalQuantity: 'Quantité Totale',
-      totalPrice: 'Prix Total',
-      noProducts: 'Aucun produit',
-      cachet: 'Cachet',
-      signature: 'Signature',
-      preparedBy: 'Préparé par',
-      approvedBy: 'Approuvé par',
-      receivedBy: 'Reçu par',
-      generatedOn: 'Généré le',
-      allRights: 'Tous droits réservés'
-    };
-
-    const html = `
-      <!DOCTYPE html>
-      <html dir="${dir}" lang="${lang}">
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>${labels.docTitle} - ${cmd.reception_id}</title>
-        ${isAr ? '<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">' : ''}
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: ${fontFamily}; background: white; color: #333; padding: 30px; direction: ${dir}; }
-          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 10px; }
-          .company-info h1 { font-size: 26px; color: #1e40af; margin-bottom: 5px; }
-          .company-info p { font-size: 12px; color: #666; margin: 3px 0; }
-          .doc-title { text-align: center; font-size: 20px; font-weight: bold; color: #1e40af; margin: 15px 0; padding: 8px; background: #f0f9ff; border-radius: 6px; border: 1px solid #bfdbfe; }
-          .logo { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; }
-          .reception-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; padding: 15px; background: #f0f9ff; border-radius: 8px; border-${isAr ? 'right' : 'left'}: 4px solid #2563eb; }
-          .detail-item h3 { font-size: 11px; color: #666; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; }
-          .detail-item p { font-size: 15px; font-weight: bold; color: #1e40af; }
-          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-          th { background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%); color: white; padding: 10px 12px; text-align: ${isAr ? 'right' : 'left'}; font-weight: bold; font-size: 12px; }
-          td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-size: 12px; }
-          tr:nth-child(even) { background: #f9fafb; }
-          .product-name { font-weight: bold; color: #1e40af; }
-          .signatures-section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; margin-top: 60px; padding-top: 20px; }
-          .signature-box { text-align: center; padding: 15px; border: 1px dashed #cbd5e1; border-radius: 8px; min-height: 120px; display: flex; flex-direction: column; justify-content: space-between; }
-          .signature-box h4 { font-size: 13px; color: #1e40af; font-weight: bold; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; }
-          .signature-box .sign-area { flex: 1; min-height: 60px; }
-          .signature-box .sign-label { font-size: 10px; color: #94a3b8; margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
-          .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #e5e7eb; text-align: center; color: #999; font-size: 11px; }
-          @media print { body { padding: 15px; } .header { page-break-after: avoid; } .signatures-section { page-break-inside: avoid; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="company-info">
-            <h1>${enterpriseSettings?.name || 'ERP System'}</h1>
-            <p><strong>${labels.address}:</strong> ${enterpriseSettings?.address || 'N/A'}</p>
-            <p><strong>${labels.phone}:</strong> ${enterpriseSettings?.phone || 'N/A'}</p>
-          </div>
-          ${enterpriseSettings?.logoUrl ? `<img src="${enterpriseSettings.logoUrl}" class="logo" />` : ''}
-        </div>
-
-        <div class="doc-title">${labels.docTitle}</div>
-
-        <div class="reception-details">
-          <div class="detail-item">
-            <h3>${labels.receptionId}</h3>
-            <p>${cmd.reception_id}</p>
-          </div>
-          <div class="detail-item">
-            <h3>${labels.status}</h3>
-            <p>${cmd.status.toUpperCase()}</p>
-          </div>
-          <div class="detail-item">
-            <h3>${labels.date}</h3>
-            <p>${new Date(cmd.created_at).toLocaleDateString(isAr ? 'ar-DZ' : 'fr-FR')}</p>
-          </div>
-        </div>
-
-        <div class="reception-details">
-          <div class="detail-item">
-            <h3>${labels.supplier}</h3>
-            <p>${cmd.supplier_name}</p>
-          </div>
-          <div class="detail-item">
-            <h3>${labels.totalQuantity}</h3>
-            <p>${cmd.total_quantity}</p>
-          </div>
-          <div class="detail-item">
-            <h3>${labels.totalPrice}</h3>
-            <p>${cmd.total_price} DA</p>
-          </div>
-        </div>
-
-        <h2 style="color: #1e40af; margin-bottom: 10px; font-size: 16px;">${labels.productsList}</h2>
-        <table>
-          <thead>
+    const body = `
+      <div class="details-grid">
+        <div class="detail-item"><h3>${L.isAr ? 'معرف الاستقبال' : 'ID de Réception'}</h3><p>${cmd.reception_id}</p></div>
+        <div class="detail-item"><h3>${L.status}</h3><p>${cmd.status.toUpperCase()}</p></div>
+        <div class="detail-item"><h3>${L.date}</h3><p>${formatDateLocale(cmd.created_at, lang)}</p></div>
+        <div class="detail-item"><h3>${L.supplier}</h3><p>${cmd.supplier_name}</p></div>
+        <div class="detail-item"><h3>${L.isAr ? 'الكمية الإجمالية' : 'Quantité Totale'}</h3><p>${cmd.total_quantity}</p></div>
+        <div class="detail-item"><h3>${L.totalPrice}</h3><p>${cmd.total_price?.toLocaleString()} DA</p></div>
+      </div>
+      <h2 class="section-title">${L.isAr ? 'المنتجات المستقبلة' : 'Produits Reçus'}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:10%;">#</th>
+            <th style="width:60%;">${L.productName}</th>
+            <th style="width:30%;">${L.quantity}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cmd.command_products?.map((p, idx) => `
             <tr>
-              <th style="width: 10%;">#</th>
-              <th style="width: 60%;">${labels.productName}</th>
-              <th style="width: 30%;">${labels.quantity}</th>
+              <td style="text-align:center;font-weight:bold;">${idx + 1}</td>
+              <td class="product-name">${p.product_name}</td>
+              <td style="text-align:center;font-weight:bold;">${p.quantity}</td>
             </tr>
-          </thead>
-          <tbody>
-            ${cmd.command_products?.map((p, idx) => `
-              <tr>
-                <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
-                <td class="product-name">${p.product_name}</td>
-                <td style="text-align: center; font-weight: bold;">${p.quantity}</td>
-              </tr>
-            `).join('') || `<tr><td colspan="3" style="text-align: center; padding: 20px; color: #999;">${labels.noProducts}</td></tr>`}
-          </tbody>
-        </table>
-
-        <div class="signatures-section">
-          <div class="signature-box">
-            <h4>${labels.preparedBy}</h4>
-            <div class="sign-area"></div>
-            <div class="sign-label">${labels.cachet} / ${labels.signature}</div>
-          </div>
-          <div class="signature-box">
-            <h4>${labels.approvedBy}</h4>
-            <div class="sign-area"></div>
-            <div class="sign-label">${labels.cachet} / ${labels.signature}</div>
-          </div>
-          <div class="signature-box">
-            <h4>${labels.receivedBy}</h4>
-            <div class="sign-area"></div>
-            <div class="sign-label">${labels.cachet} / ${labels.signature}</div>
-          </div>
-        </div>
-
-        <div class="footer">
-          <p>${labels.generatedOn} ${new Date().toLocaleString(isAr ? 'ar-DZ' : 'fr-FR')}</p>
-          <p>&copy; ${new Date().getFullYear()} ${enterpriseSettings?.name || 'ERP System'}. ${labels.allRights}.</p>
-        </div>
-      </body>
-      </html>
+          `).join('') || `<tr><td colspan="3" style="text-align:center;padding:20px;color:#999;">${L.noData}</td></tr>`}
+        </tbody>
+      </table>
     `;
-
-    printWindow.document.write(html);
-    printWindow.document.close();
-    
-    setTimeout(() => {
-      printWindow.print();
-    }, 500);
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'وثيقة الاستقبال', fr: 'Document de Réception' },
+      docId: cmd.reception_id,
+      docDate: formatDateLocale(cmd.created_at, lang),
+      enterpriseSettings,
+      signaturesHTML: getSignaturesHTML(lang, L.receivedBy),
+    }, body));
   };
 
   if (loading) {

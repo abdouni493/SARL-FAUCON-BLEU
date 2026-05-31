@@ -417,8 +417,13 @@ export default function ReceiveProductsPage() {
       ${receptionItems.map((item, idx) => `<tr><td style="text-align:center;font-weight:bold;">${idx+1}</td><td class="product-name">${item.product_name}</td><td style="text-align:center;">${item.quantity}</td><td>${item.price_per_unity.toLocaleString()} DA</td><td class="amount">${(item.quantity * item.price_per_unity).toLocaleString()} DA</td></tr>`).join('')}
       <tr class="total-row"><td colspan="3"></td><td>${L.total}:</td><td class="amount">${reception.total_price.toLocaleString()} DA</td></tr>
       </tbody></table>
-      ${reception.notes ? `<div style="padding:15px;background:#f9fafb;border-radius:8px;margin-bottom:15px;"><strong>${L.notes}:</strong><br>${reception.notes}</div>` : ''}`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: 'وثيقة استقبال المنتجات', fr: 'Document de Réception Produits' }, enterpriseSettings }, body));
+      ${reception.notes ? `<div class="notes-box"><strong>${L.notes}:</strong><br>${reception.notes}</div>` : ''}`;
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: 'استقبال المنتجات', fr: 'Réception Produits' },
+      docDate: formatDateLocale(reception.reception_date, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   // Calculations

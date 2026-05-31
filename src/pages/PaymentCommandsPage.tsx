@@ -400,8 +400,14 @@ export default function PaymentCommandsPage() {
         <div class="detail-item"><h3>${L.amount}</h3><p>${cmd.total_price.toLocaleString()} DA</p></div>
         <div class="detail-item"><h3>${L.isAr ? '\u0645\u0648\u0627\u0641\u0642\u0629 \u0627\u0644\u0625\u062f\u0627\u0631\u0629' : 'Approbation Admin'}</h3><p>${cmd.admin_validated ? (L.isAr ? '\u2713 \u0645\u0648\u0627\u0641\u0642' : '\u2713 Approuv\u00e9') : (L.isAr ? '\u23f3 \u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631' : '\u23f3 En attente')}</p></div>
       </div>
-      ${cmd.note ? `<div style="padding:15px;background:#fef3c7;border-radius:8px;border-left:4px solid #f59e0b;margin-top:15px;"><strong>${L.notes}:</strong><br>${cmd.note}</div>` : ''}`;
-    openPrintWindow(buildPrintHTML({ lang, docTitle: { ar: '\u0623\u0645\u0631 \u0627\u0644\u062f\u0641\u0639', fr: 'Ordre de Paiement' }, enterpriseSettings }, body));
+      ${cmd.note ? `<div class="notes-box"><strong>${L.notes}:</strong><br>${cmd.note}</div>` : ''}`;
+    openPrintWindow(buildPrintHTML({
+      lang,
+      docTitle: { ar: '\u0623\u0645\u0631 \u0627\u0644\u062f\u0641\u0639', fr: 'Ordre de Paiement' },
+      docId: cmd.id?.substring(0, 12),
+      docDate: formatDateLocale(cmd.created_at, lang),
+      enterpriseSettings,
+    }, body));
   };
 
   const getValidationStatus = (cmd: PaymentOrder): string => {
