@@ -75,99 +75,155 @@ export function getPrintStyles(lang: 'ar' | 'fr') {
     * { margin:0; padding:0; box-sizing:border-box; }
     body { font-family:${fontFamily}; background:#fff; color:#1e293b; padding:24px 32px; direction:${dir}; font-size:13px; line-height:1.5; }
 
-    /* ── DOCUMENT TITLE BAR ─────────────────────────────────── */
-    .doc-title-bar { text-align:center; padding:14px 0 10px; }
-    .doc-title-bar h1 {
-      font-size:26px; font-weight:900; color:#1e3a8a;
+    /* ── DOCUMENT TITLE BAR WITH LOGO ──────────────────────── */
+    .title-bar {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:16px;
+      padding-bottom:12px;
+      border-bottom:3px solid #1e3a8a;
+    }
+    .title-bar h1 {
+      font-size:28px; font-weight:900; color:#1e3a8a;
       letter-spacing:2px; text-transform:uppercase; margin:0;
+      flex:1; text-align:center;
+    }
+    .title-logo {
+      width:100px; height:100px; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center;
+    }
+    .title-logo img {
+      width:100%; height:100%; object-fit:contain;
+      border-radius:6px;
+    }
+    .title-logo .no-logo {
+      width:100%; height:100%; background:#eff6ff;
+      border-radius:6px; border:2px dashed #93c5fd;
+      display:flex; align-items:center; justify-content:center;
+      font-size:11px; color:#60a5fa; font-weight:700;
     }
 
     /* ── DIVIDERS ────────────────────────────────────────────── */
-    .title-divider {
-      border:none; border-top:3px solid #1e3a8a; margin:10px 0 14px;
-    }
     .header-divider {
       border:none; border-top:1.5px solid #cbd5e1; margin:14px 0 18px;
     }
 
-    /* ── HEADER (logo | company | doc meta) ──────────────────── */
+    /* ── HEADER SECTION (company info + doc meta) ──────────── */
     .header {
       display:grid;
       grid-template-columns:1fr 1fr;
-      gap:24px;
+      gap:32px;
       margin-bottom:6px;
-      position:relative;
     }
-    .header-logo {
-      grid-column:${isAr ? '1' : '2'};
-      text-align:${isAr ? 'left' : 'right'};
-    }
-    .header-logo img {
-      width:80px; height:80px; object-fit:contain;
-      border-radius:8px; border:1px solid #e2e8f0;
-    }
-    .header-logo .no-logo {
-      width:80px; height:80px; background:#eff6ff;
-      border-radius:8px; border:2px dashed #93c5fd;
-      display:flex; align-items:center; justify-content:center;
-      font-size:10px; color:#60a5fa; font-weight:700;
-    }
+
+    /* ── COMPANY INFO SECTION ──────────────────────────────── */
     .company-info {
-      grid-column:1;
       text-align:${isAr ? 'right' : 'left'};
     }
     .company-info h2 {
-      font-size:15px; font-weight:800; color:#1e3a8a;
-      margin-bottom:8px; border-bottom:2px solid #1e3a8a;
-      padding-bottom:6px;
+      font-size:16px; font-weight:800; color:#1e3a8a;
+      margin-bottom:10px; border-bottom:2px solid #1e3a8a;
+      padding-bottom:8px;
     }
-    .company-info .company-contact {
-      font-size:10px; color:#64748b; margin-bottom:8px;
-      display:grid; grid-template-columns:auto 1fr; gap:2px 8px;
-    }
-    .company-info .company-contact div {
-      display:contents;
-    }
-    .company-info .company-contact div strong {
-      color:#1e3a8a; font-weight:700;
-    }
-    .company-legal {
-      font-size:10px; color:#64748b; margin-top:8px;
-      display:grid; grid-template-columns:auto 1fr; gap:2px 8px;
-    }
-    .company-legal div {
-      display:contents;
-    }
-    .company-legal div strong {
-      color:#1e3a8a; font-weight:700;
-    }
-    .company-meta {
-      display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;
-    }
-    .company-meta span {
-      font-size:10px; color:#475569; background:#f1f5f9;
-      padding:3px 10px; border-radius:20px; border:1px solid #e2e8f0;
-    }
-    .doc-meta {
-      grid-column:${isAr ? '1' : '2'};
-      font-size:10px; color:#475569;
-      padding:8px 12px;
-      background:#f1f5f9;
+    .company-contact {
+      margin-bottom:14px;
+      background:#f8fafc;
+      padding:10px 12px;
       border-radius:6px;
-      border-left:4px solid #1e3a8a;
+      border-${side}:3px solid #e0e7ff;
+    }
+    .company-contact .contact-row {
+      display:flex;
+      justify-content:flex-start;
+      margin-bottom:5px;
+      font-size:11px;
+      line-height:1.4;
+    }
+    .company-contact .contact-row:last-child {
+      margin-bottom:0;
+    }
+    .company-contact .contact-label {
+      color:#1e3a8a;
+      font-weight:700;
+      width:90px;
+      flex-shrink:0;
+    }
+    .company-contact .contact-value {
+      color:#64748b;
+      flex:1;
+    }
+
+    /* ── LEGAL IDENTIFIERS SECTION ────────────────────────── */
+    .company-legal {
+      background:linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+      border:2px solid #1e3a8a;
+      border-radius:8px;
+      padding:12px 14px;
+    }
+    .legal-title {
+      font-size:12px;
+      font-weight:800;
+      color:#1e3a8a;
+      text-transform:uppercase;
+      letter-spacing:0.8px;
+      margin-bottom:10px;
+      display:flex;
+      align-items:center;
+      gap:6px;
+    }
+    .legal-title::before {
+      content:'';
+      display:inline-block;
+      width:4px;
+      height:12px;
+      background:#1e3a8a;
+      border-radius:2px;
+    }
+    .legal-items {
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px 12px;
+    }
+    .legal-item {
+      font-size:10px;
+    }
+    .legal-item .legal-label {
+      color:#1e3a8a;
+      font-weight:700;
+      display:block;
+      margin-bottom:2px;
+    }
+    .legal-item .legal-value {
+      color:#64748b;
+      font-weight:600;
+      display:block;
+    }
+
+    /* ── DOCUMENT METADATA SECTION ────────────────────────── */
+    .doc-meta {
+      font-size:11px;
+      background:linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      padding:14px 16px;
+      border-radius:8px;
+      border:1.5px solid #cbd5e1;
+      border-${side}:4px solid #1e3a8a;
     }
     .doc-meta .doc-meta-row {
       display:flex;
       justify-content:space-between;
-      margin-bottom:6px;
+      margin-bottom:8px;
+      padding-bottom:8px;
+      border-bottom:1px solid #e2e8f0;
     }
     .doc-meta .doc-meta-row:last-child {
       margin-bottom:0;
+      padding-bottom:0;
+      border-bottom:none;
     }
     .doc-meta .doc-meta-row .label {
-      color:#94a3b8;
+      color:#64748b;
       font-weight:600;
-      margin-${isAr ? 'left' : 'right'}:8px;
     }
     .doc-meta .doc-meta-row .value {
       font-weight:700;
@@ -297,34 +353,36 @@ export function getHeaderHTML(config: PrintConfig) {
   const timeStr = now.toLocaleTimeString(L.isAr ? 'ar-DZ' : 'fr-FR', { hour: '2-digit', minute: '2-digit' });
 
   return `
-    <!-- ─── DOCUMENT TITLE ─────────────────────────────────── -->
-    <div class="doc-title-bar">
+    <!-- ─── TITLE BAR WITH LOGO ─────────────────────────────── -->
+    <div class="title-bar">
       <h1>${config.docTitle[config.lang]}</h1>
-    </div>
-    <hr class="title-divider" />
-
-    <!-- ─── HEADER: company info (left) | logo (top right) | doc meta (right) ─────────────── -->
-    <div class="header">
-      <div class="company-info">
-        <h2>${es?.name || 'ERP System'}</h2>
-        <div class="company-contact">
-          ${es?.address ? `<div><strong>${L.address}:</strong> ${es.address}</div>` : ''}
-          ${es?.phone ? `<div><strong>${L.phone}:</strong> ${es.phone}</div>` : ''}
-          ${es?.email ? `<div><strong>${L.email}:</strong> ${es.email}</div>` : ''}
-        </div>
-        <div class="company-legal">
-          <div><strong>${L.legalIdentifiers}</strong></div>
-          ${es?.nis ? `<div><strong>${L.nis}:</strong> ${es.nis}</div>` : ''}
-          ${es?.nif ? `<div><strong>${L.nif}:</strong> ${es.nif}</div>` : ''}
-          ${es?.rc ? `<div><strong>${L.rc}:</strong> ${es.rc}</div>` : ''}
-          ${es?.article ? `<div><strong>${L.article}:</strong> ${es.article}</div>` : ''}
-        </div>
-      </div>
-
-      <div class="header-logo">
+      <div class="title-logo">
         ${es?.logoUrl
           ? `<img src="${es.logoUrl}" alt="Logo" />`
           : `<div class="no-logo">LOGO</div>`}
+      </div>
+    </div>
+
+    <!-- ─── HEADER: company info (left) | doc meta (right) ─────── -->
+    <div class="header">
+      <div class="company-info">
+        <h2>${es?.name || 'ERP System'}</h2>
+        
+        <div class="company-contact">
+          ${es?.address ? `<div class="contact-row"><span class="contact-label">${L.address}:</span><span class="contact-value">${es.address}</span></div>` : ''}
+          ${es?.phone ? `<div class="contact-row"><span class="contact-label">${L.phone}:</span><span class="contact-value">${es.phone}</span></div>` : ''}
+          ${es?.email ? `<div class="contact-row"><span class="contact-label">${L.email}:</span><span class="contact-value">${es.email}</span></div>` : ''}
+        </div>
+
+        <div class="company-legal">
+          <div class="legal-title">${L.legalIdentifiers}</div>
+          <div class="legal-items">
+            ${es?.nis ? `<div class="legal-item"><span class="legal-label">${L.nis}</span><span class="legal-value">${es.nis}</span></div>` : ''}
+            ${es?.nif ? `<div class="legal-item"><span class="legal-label">${L.nif}</span><span class="legal-value">${es.nif}</span></div>` : ''}
+            ${es?.rc ? `<div class="legal-item"><span class="legal-label">${L.rc}</span><span class="legal-value">${es.rc}</span></div>` : ''}
+            ${es?.article ? `<div class="legal-item"><span class="legal-label">${L.article}</span><span class="legal-value">${es.article}</span></div>` : ''}
+          </div>
+        </div>
       </div>
 
       <div class="doc-meta">
