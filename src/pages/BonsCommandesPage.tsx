@@ -1573,20 +1573,24 @@ export default function BonsCommandesPage() {
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                             <div>
                               <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Supplier *</label>
-                              <Select value={offer.supplier_name} onValueChange={(v) => handleOfferChange(idx, 'supplier_name', v)}>
-                                <SelectTrigger className="text-sm border-orange-300 dark:border-orange-600 focus:border-orange-500">
-                                  <SelectValue placeholder="Select supplier..." />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {suppliers.length === 0 ? (
-                                    <SelectItem value="">No suppliers available</SelectItem>
-                                  ) : (
-                                    suppliers.map(s => (
+                              {suppliers.length === 0 ? (
+                                <Input 
+                                  disabled 
+                                  placeholder="No suppliers available" 
+                                  className="text-sm"
+                                />
+                              ) : (
+                                <Select value={offer.supplier_name} onValueChange={(v) => handleOfferChange(idx, 'supplier_name', v)}>
+                                  <SelectTrigger className="text-sm border-orange-300 dark:border-orange-600 focus:border-orange-500">
+                                    <SelectValue placeholder="Select supplier..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {suppliers.map(s => (
                                       <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
-                                    ))
-                                  )}
-                                </SelectContent>
-                              </Select>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              )}
                             </div>
                           </div>
 

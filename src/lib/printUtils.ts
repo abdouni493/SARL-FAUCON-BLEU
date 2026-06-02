@@ -59,6 +59,12 @@ export function getPrintLabels(lang: 'ar' | 'fr') {
     noData: isAr ? 'لا توجد بيانات' : 'Aucune donnée',
     docNumber: isAr ? 'رقم الوثيقة' : 'N° Document',
     printedOn: isAr ? 'طُبع بتاريخ' : 'Imprimé le',
+    legalIdentifiers: isAr ? 'الهويات القانونية' : 'Identifiants Légaux',
+    nis: isAr ? 'رقم NIS' : 'NIS',
+    nif: isAr ? 'رقم NIF' : 'NIF',
+    rc: isAr ? 'رقم RC' : 'RC',
+    article: isAr ? 'مادة الخضوع للضريبة' : 'Article d\'imposition',
+    email: isAr ? 'البريد الإلكتروني' : 'Email',
   };
 }
 
@@ -87,10 +93,14 @@ export function getPrintStyles(lang: 'ar' | 'fr') {
     /* ── HEADER (logo | company | doc meta) ──────────────────── */
     .header {
       display:grid;
-      grid-template-columns:90px 1fr auto;
+      grid-template-columns:1fr 1fr;
       gap:24px;
-      align-items:center;
-      padding:6px 0;
+      margin-bottom:6px;
+      position:relative;
+    }
+    .header-logo {
+      grid-column:${isAr ? '1' : '2'};
+      text-align:${isAr ? 'left' : 'right'};
     }
     .header-logo img {
       width:80px; height:80px; object-fit:contain;
@@ -102,21 +112,67 @@ export function getPrintStyles(lang: 'ar' | 'fr') {
       display:flex; align-items:center; justify-content:center;
       font-size:10px; color:#60a5fa; font-weight:700;
     }
-    .company-info { text-align:center; }
-    .company-info h2 { font-size:17px; font-weight:800; color:#1e3a8a; margin-bottom:5px; }
-    .company-info .company-contact { font-size:11px; color:#64748b; margin-bottom:6px; }
-    .company-info .company-contact div { margin:2px 0; }
+    .company-info {
+      grid-column:1;
+      text-align:${isAr ? 'right' : 'left'};
+    }
+    .company-info h2 {
+      font-size:15px; font-weight:800; color:#1e3a8a;
+      margin-bottom:8px; border-bottom:2px solid #1e3a8a;
+      padding-bottom:6px;
+    }
+    .company-info .company-contact {
+      font-size:10px; color:#64748b; margin-bottom:8px;
+      display:grid; grid-template-columns:auto 1fr; gap:2px 8px;
+    }
+    .company-info .company-contact div {
+      display:contents;
+    }
+    .company-info .company-contact div strong {
+      color:#1e3a8a; font-weight:700;
+    }
+    .company-legal {
+      font-size:10px; color:#64748b; margin-top:8px;
+      display:grid; grid-template-columns:auto 1fr; gap:2px 8px;
+    }
+    .company-legal div {
+      display:contents;
+    }
+    .company-legal div strong {
+      color:#1e3a8a; font-weight:700;
+    }
     .company-meta {
-      display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin-top:6px;
+      display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;
     }
     .company-meta span {
       font-size:10px; color:#475569; background:#f1f5f9;
-      padding:2px 8px; border-radius:20px; border:1px solid #e2e8f0;
+      padding:3px 10px; border-radius:20px; border:1px solid #e2e8f0;
     }
-    .doc-meta { text-align:${isAr ? 'left' : 'right'}; font-size:11px; color:#475569; white-space:nowrap; }
-    .doc-meta .doc-meta-row { margin-bottom:5px; }
-    .doc-meta .doc-meta-row .label { color:#94a3b8; }
-    .doc-meta .doc-meta-row .value { font-weight:700; color:#1e3a8a; margin-${side}:4px; }
+    .doc-meta {
+      grid-column:${isAr ? '1' : '2'};
+      font-size:10px; color:#475569;
+      padding:8px 12px;
+      background:#f1f5f9;
+      border-radius:6px;
+      border-left:4px solid #1e3a8a;
+    }
+    .doc-meta .doc-meta-row {
+      display:flex;
+      justify-content:space-between;
+      margin-bottom:6px;
+    }
+    .doc-meta .doc-meta-row:last-child {
+      margin-bottom:0;
+    }
+    .doc-meta .doc-meta-row .label {
+      color:#94a3b8;
+      font-weight:600;
+      margin-${isAr ? 'left' : 'right'}:8px;
+    }
+    .doc-meta .doc-meta-row .value {
+      font-weight:700;
+      color:#1e3a8a;
+    }
 
     /* ── DETAILS GRID ────────────────────────────────────────── */
     .details-grid {
@@ -247,27 +303,28 @@ export function getHeaderHTML(config: PrintConfig) {
     </div>
     <hr class="title-divider" />
 
-    <!-- ─── HEADER: logo | company | doc meta ─────────────── -->
+    <!-- ─── HEADER: company info (left) | logo (top right) | doc meta (right) ─────────────── -->
     <div class="header">
+      <div class="company-info">
+        <h2>${es?.name || 'ERP System'}</h2>
+        <div class="company-contact">
+          ${es?.address ? `<div><strong>${L.address}:</strong> ${es.address}</div>` : ''}
+          ${es?.phone ? `<div><strong>${L.phone}:</strong> ${es.phone}</div>` : ''}
+          ${es?.email ? `<div><strong>${L.email}:</strong> ${es.email}</div>` : ''}
+        </div>
+        <div class="company-legal">
+          <div><strong>${L.legalIdentifiers}</strong></div>
+          ${es?.nis ? `<div><strong>${L.nis}:</strong> ${es.nis}</div>` : ''}
+          ${es?.nif ? `<div><strong>${L.nif}:</strong> ${es.nif}</div>` : ''}
+          ${es?.rc ? `<div><strong>${L.rc}:</strong> ${es.rc}</div>` : ''}
+          ${es?.article ? `<div><strong>${L.article}:</strong> ${es.article}</div>` : ''}
+        </div>
+      </div>
+
       <div class="header-logo">
         ${es?.logoUrl
           ? `<img src="${es.logoUrl}" alt="Logo" />`
           : `<div class="no-logo">LOGO</div>`}
-      </div>
-
-      <div class="company-info">
-        <h2>${es?.name || 'ERP System'}</h2>
-        <div class="company-contact">
-          ${es?.address ? `<div>${L.address}: ${es.address}</div>` : ''}
-          ${es?.phone ? `<div>${L.phone}: ${es.phone}</div>` : ''}
-          ${es?.email ? `<div>Email: ${es.email}</div>` : ''}
-        </div>
-        <div class="company-meta">
-          ${es?.nis ? `<span><strong>NIS:</strong> ${es.nis}</span>` : ''}
-          ${es?.nif ? `<span><strong>NIF:</strong> ${es.nif}</span>` : ''}
-          ${es?.rc ? `<span><strong>RC:</strong> ${es.rc}</span>` : ''}
-          ${es?.article ? `<span><strong>Art:</strong> ${es.article}</span>` : ''}
-        </div>
       </div>
 
       <div class="doc-meta">
@@ -277,7 +334,6 @@ export function getHeaderHTML(config: PrintConfig) {
         <div class="doc-meta-row"><span class="label">${L.printedOn}:</span><span class="value">${dateStr} ${timeStr}</span></div>
       </div>
     </div>
-
     <hr class="header-divider" />
   `;
 }
