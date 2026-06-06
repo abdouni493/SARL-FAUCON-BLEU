@@ -189,7 +189,7 @@ export default function BonsCommandesPage() {
         setBonsCommandes(basicData || []);
         await loadProductCounts(basicData || []);
       } catch (fallbackErr) {
-        setMessage(`Error loading bons: ${err.message}`);
+        setMessage(t('common.error'));
       }
     } finally {
       setLoading(false);
@@ -243,7 +243,7 @@ export default function BonsCommandesPage() {
       if (error) throw error;
       setBonProducts(data || []);
     } catch (err: any) {
-      setMessage(`Error loading products: ${err.message}`);
+      setMessage(t('common.error'));
     }
   };
 
@@ -258,7 +258,7 @@ export default function BonsCommandesPage() {
       if (error) throw error;
       setBonOffers(data || []);
     } catch (err: any) {
-      setMessage(`Error loading offers: ${err.message}`);
+      setMessage(t('common.error'));
     }
   };
 
@@ -399,13 +399,13 @@ export default function BonsCommandesPage() {
       // Validate file
       const maxSize = 5 * 1024 * 1024; // 5MB
       if (file.size > maxSize) {
-        setMessage('File size exceeds 5MB limit');
+        setMessage(t('bonCommandes.file_size_limit'));
         setUploadingImage(null);
         return;
       }
 
       if (!file.type.startsWith('image/')) {
-        setMessage('Only image files are allowed');
+        setMessage(t('bonCommandes.only_images'));
         setUploadingImage(null);
         return;
       }
@@ -444,7 +444,7 @@ export default function BonsCommandesPage() {
       updated[offerIndex].image_path = data.path; // Store path in database too
       setNewOffers(updated);
 
-      setMessage('✅ Image uploaded successfully!');
+      setMessage('✅ ' + t('bonCommandes.image_uploaded'));
     } catch (error: any) {
       console.error('Error uploading image:', error);
       setMessage(`❌ Error: ${error.message}`);
@@ -526,13 +526,13 @@ export default function BonsCommandesPage() {
 
   const handleSaveBon = async () => {
     if (!formData.bon_id || !formData.supplier_name) {
-      setMessage('Please fill in all required fields');
+      setMessage(t('common.fill_required_fields'));
       return;
     }
 
     const validProducts = products.filter(p => p.product_name && p.quantity > 0);
     if (validProducts.length === 0) {
-      setMessage('Please add at least one product');
+      setMessage(t('bonCommandes.pleaseAddProduct'));
       return;
     }
 
@@ -627,7 +627,7 @@ export default function BonsCommandesPage() {
         if (insertError) throw insertError;
       }
 
-      setMessage(editingBonId ? 'Bon de commande updated successfully!' : 'Bon de commande created successfully!');
+      setMessage(editingBonId ? t('bonCommandes.updated_success') : t('bonCommandes.created_success'));
       setShowCreateDialog(false);
       setEditingBonId(null);
       setEditingBon(null);
@@ -647,7 +647,7 @@ export default function BonsCommandesPage() {
       await supabase.from('bons_commandes_products').delete().eq('bon_commande_id', deleteId);
       await supabase.from('bons_commandes').delete().eq('id', deleteId);
 
-      setMessage('Bon de commande deleted successfully!');
+      setMessage(t('bonCommandes.deleted_success'));
       setDeleteId(null);
       setViewBon(null);
       await fetchData();
@@ -688,11 +688,11 @@ export default function BonsCommandesPage() {
           .eq('id', bon.id);
       }
 
-      setMessage('✅ Validation enregistrée avec succès!');
+      setMessage('✅ ' + t('bonCommandes.validation_saved'));
       await fetchData();
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
-      setMessage(`❌ Erreur: ${err.message}`);
+      setMessage('❌ ' + t('common.error'));
     } finally {
       setValidatingBonId(null);
     }
@@ -780,8 +780,8 @@ export default function BonsCommandesPage() {
       ) : filteredBons.length === 0 ? (
         <div className="text-center p-12 bg-slate-50 dark:bg-slate-800 rounded-lg">
           <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">No bons de commande found</p>
-          {searchQuery && <p className="text-sm mt-2">{t('common.no_results_found')}</p>}
+          <p className="text-muted-foreground">{t('bonCommandes.no_bons_found')}</p>
+          {searchQuery && <p className="text-sm mt-2">{t('common.no_results')}</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -806,7 +806,7 @@ export default function BonsCommandesPage() {
                       )}
                     </div>
                     <Badge className={getStatusColor(bon.status)} style={{ minWidth: 'fit-content' }}>
-                      {bon.status}
+                      {t(`common.${bon.status}`) || bon.status}
                     </Badge>
                   </div>
                 </div>
@@ -860,19 +860,19 @@ export default function BonsCommandesPage() {
 
                   {/* Validation Badges */}
                   <div className="px-6">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Validations</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('bonCommandes.validations')}</p>
                     <div className="flex gap-2 flex-wrap">
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.purchase_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
                         {bon.purchase_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                        Détecteur
+                        {t('bonCommandes.purchase_validator')}
                       </span>
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.admin_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
                         {bon.admin_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                        Admin
+                        {t('roles.admin')}
                       </span>
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${bon.comptable_validated ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
                         {bon.comptable_validated ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                        Comptable
+                        {t('roles.comptable')}
                       </span>
                     </div>
                   </div>
@@ -901,7 +901,7 @@ export default function BonsCommandesPage() {
                         {validatingBonId === bon.id
                           ? <Loader className="w-4 h-4 mr-2 animate-spin" />
                           : <CheckCircle className="w-4 h-4 mr-2" />}
-                        Valider
+                        {t('bonCommandes.validate')}
                       </Button>
                     ) : null;
                   })()}
@@ -966,10 +966,10 @@ export default function BonsCommandesPage() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingBonId ? 'Edit Bon de Commande' : 'Create Bon de Commande'}
+              {editingBonId ? t('bonCommandes.edit_title') : t('bonCommandes.create_title')}
             </DialogTitle>
             <DialogDescription>
-              {editingBonId ? 'Update the bon de commande details' : 'Create a new bon de commande with products'}
+              {editingBonId ? t('bonCommandes.update_details') : t('bonCommandes.create_details')}
             </DialogDescription>
           </DialogHeader>
 
@@ -977,7 +977,7 @@ export default function BonsCommandesPage() {
             {/* Form Fields */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-foreground mb-2">Bon ID</label>
+                <label className="block text-sm font-semibold text-foreground mb-2">{t('bonCommandes.bon_id_label')}</label>
                 <Input
                   value={formData.bon_id}
                   onChange={(e) => setFormData({ ...formData, bon_id: e.target.value })}
@@ -985,40 +985,40 @@ export default function BonsCommandesPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-foreground mb-2">Supplier Name</label>
+                <label className="block text-sm font-semibold text-foreground mb-2">{t('common.supplier')}</label>
                 <Input
                   value={formData.supplier_name}
                   onChange={(e) => setFormData({ ...formData, supplier_name: e.target.value })}
-                  placeholder="Supplier name"
+                  placeholder={t('common.supplier')}
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">Notes</label>
+              <label className="block text-sm font-semibold text-foreground mb-2">{t('common.notes')}</label>
               <Input
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="Additional notes"
+                placeholder={t('common.notes')}
               />
             </div>
 
             {/* Products Table */}
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-blue-50 dark:bg-slate-800 px-4 py-3 border-b">
-                <h3 className="font-semibold text-foreground">Products</h3>
+                <h3 className="font-semibold text-foreground">{t('common.products')}</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-slate-50 dark:bg-slate-900">
-                      <th className="px-4 py-2 text-left font-semibold">Product Name</th>
-                      <th className="px-4 py-2 text-left font-semibold">Barcode</th>
-                      <th className="px-4 py-2 text-left font-semibold">Quantity</th>
-                      <th className="px-4 py-2 text-left font-semibold">Unit Price</th>
-                      <th className="px-4 py-2 text-left font-semibold">Total HT</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.product_name')}</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.barcode')}</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.quantity')}</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.unit_price')}</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.total_without_tva')}</th>
                       <th className="px-4 py-2 text-left font-semibold">TVA %</th>
-                      <th className="px-4 py-2 text-left font-semibold">Total TTC</th>
+                      <th className="px-4 py-2 text-left font-semibold">{t('common.total_with_tva')}</th>
                       <th className="px-4 py-2 text-left font-semibold"></th>
                     </tr>
                   </thead>
@@ -1120,7 +1120,7 @@ export default function BonsCommandesPage() {
                   variant="outline"
                   onClick={() => setProducts([...products, { product_name: '', quantity: 1, unity_price: 0, tva_rate: 19 }])}
                 >
-                  <Plus className="w-4 h-4 mr-2" /> Add Product
+                  <Plus className="w-4 h-4 mr-2" /> {t('bonCommandes.add_product_btn')}
                 </Button>
               </div>
             </div>
@@ -1128,10 +1128,10 @@ export default function BonsCommandesPage() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button className="btn-gradient" onClick={handleSaveBon}>
-              <Save className="w-4 h-4 mr-2" /> {editingBonId ? 'Update' : 'Create'} Bon
+              <Save className="w-4 h-4 mr-2" /> {editingBonId ? t('common.update') : t('common.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1142,7 +1142,7 @@ export default function BonsCommandesPage() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              Bon de Commande: {viewBon?.bon_id}
+              {t('bonCommandes.view_title')}: {viewBon?.bon_id}
             </DialogTitle>
             <DialogDescription>
               {viewBon?.supplier_name} - {new Date(viewBon?.created_at || '').toLocaleDateString()}
@@ -1154,15 +1154,15 @@ export default function BonsCommandesPage() {
               {/* Info Grid */}
               <div className="grid grid-cols-3 gap-4 p-3 bg-blue-50 dark:bg-slate-700 rounded-lg border border-blue-200 dark:border-slate-600">
                 <div>
-                  <span className="text-xs text-muted-foreground block">Status</span>
-                  <Badge className={getStatusColor(viewBon.status)}>{viewBon.status}</Badge>
+                  <span className="text-xs text-muted-foreground block">{t('common.status')}</span>
+                  <Badge className={getStatusColor(viewBon.status)}>{t(`common.${viewBon.status}`) || viewBon.status}</Badge>
                 </div>
                 <div>
-                  <span className="text-xs text-muted-foreground block">Subtotal</span>
+                  <span className="text-xs text-muted-foreground block">{t('common.subtotal')}</span>
                   <span className="font-bold text-foreground">{viewBon.total_without_tva.toLocaleString()} DA</span>
                 </div>
                 <div>
-                  <span className="text-xs text-muted-foreground block">Total with TVA</span>
+                  <span className="text-xs text-muted-foreground block">{t('common.total_with_tva')}</span>
                   <span className="font-bold text-blue-700 dark:text-blue-300">{viewBon.total_with_tva.toLocaleString()} DA</span>
                 </div>
               </div>
@@ -1170,19 +1170,19 @@ export default function BonsCommandesPage() {
               {/* Products Table */}
               <div className="border rounded-lg overflow-hidden">
                 <div className="bg-blue-50 dark:bg-slate-800 px-4 py-3 border-b">
-                  <h3 className="font-semibold text-foreground">Products ({bonProducts.length})</h3>
+                  <h3 className="font-semibold text-foreground">{t('common.products')} ({bonProducts.length})</h3>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-slate-50 dark:bg-slate-900">
-                        <th className="px-4 py-2 text-left font-semibold">Product</th>
-                        <th className="px-4 py-2 text-left font-semibold">Barcode</th>
-                        <th className="px-4 py-2 text-center font-semibold">Qty</th>
-                        <th className="px-4 py-2 text-right font-semibold">Unit Price</th>
-                        <th className="px-4 py-2 text-right font-semibold">Total HT</th>
+                        <th className="px-4 py-2 text-left font-semibold">{t('common.product')}</th>
+                        <th className="px-4 py-2 text-left font-semibold">{t('common.barcode')}</th>
+                        <th className="px-4 py-2 text-center font-semibold">{t('common.quantity')}</th>
+                        <th className="px-4 py-2 text-right font-semibold">{t('common.unit_price')}</th>
+                        <th className="px-4 py-2 text-right font-semibold">{t('common.total_without_tva')}</th>
                         <th className="px-4 py-2 text-right font-semibold">TVA</th>
-                        <th className="px-4 py-2 text-right font-semibold">Total TTC</th>
+                        <th className="px-4 py-2 text-right font-semibold">{t('common.total_with_tva')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1210,18 +1210,18 @@ export default function BonsCommandesPage() {
               {bonOffers.length > 0 && (
                 <div className="border rounded-lg overflow-hidden">
                   <div className="bg-purple-50 dark:bg-slate-800 px-4 py-3 border-b">
-                    <h3 className="font-semibold text-foreground">Offers ({bonOffers.length})</h3>
+                    <h3 className="font-semibold text-foreground">{t('common.offers')} ({bonOffers.length})</h3>
                   </div>
                   <div className="p-4 space-y-4">
                     {bonOffers.map((offer, idx) => (
                       <div key={idx} className="p-4 border border-purple-200 dark:border-slate-600 rounded-lg bg-purple-50 dark:bg-slate-700">
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <p className="text-xs text-muted-foreground font-semibold mb-1">Supplier</p>
+                            <p className="text-xs text-muted-foreground font-semibold mb-1">{t('common.supplier')}</p>
                             <p className="text-sm font-semibold text-foreground">{offer.supplier_name}</p>
                             {offer.notes && (
                               <div className="mt-3">
-                                <p className="text-xs text-muted-foreground font-semibold mb-1">Notes</p>
+                                <p className="text-xs text-muted-foreground font-semibold mb-1">{t('common.notes')}</p>
                                 <p className="text-sm text-foreground">{offer.notes}</p>
                               </div>
                             )}
@@ -1250,7 +1250,7 @@ export default function BonsCommandesPage() {
               {/* Notes */}
               {viewBon.notes && (
                 <div className="p-3 bg-amber-50 dark:bg-slate-700 border border-amber-200 dark:border-slate-600 rounded-lg">
-                  <h4 className="font-semibold text-foreground mb-2">Notes</h4>
+                  <h4 className="font-semibold text-foreground mb-2">{t('common.notes')}</h4>
                   <p className="text-sm text-foreground">{viewBon.notes}</p>
                 </div>
               )}
@@ -1262,7 +1262,7 @@ export default function BonsCommandesPage() {
               variant="outline"
               onClick={() => viewBon && handleEditBon(viewBon)}
             >
-              <Edit className="w-4 h-4 mr-2" /> Edit
+              <Edit className="w-4 h-4 mr-2" /> {t('common.edit')}
             </Button>
             <Button
               className="btn-gradient"
@@ -1274,7 +1274,7 @@ export default function BonsCommandesPage() {
               variant="outline"
               onClick={() => setViewBon(null)}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1284,18 +1284,18 @@ export default function BonsCommandesPage() {
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Bon de Commande</AlertDialogTitle>
+            <AlertDialogTitle>{t('bonCommandes.delete_title')}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this bon de commande? This action cannot be undone.
+              {t('bonCommandes.delete_description')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteBon}
               className="bg-red-600 hover:bg-red-700"
             >
-              Delete
+              {t('common.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1412,7 +1412,7 @@ export default function BonsCommandesPage() {
                           return (
                             <>
                               <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-emerald-200 dark:border-emerald-700">
-                                <p className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold mb-1">Subtotal (HT)</p>
+                                <p className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold mb-1">{t('common.subtotal')} (HT)</p>
                                 <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{totalSubtotal.toLocaleString()} DA</p>
                               </div>
                               <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-amber-200 dark:border-amber-700">
@@ -1420,7 +1420,7 @@ export default function BonsCommandesPage() {
                                 <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{totalTva.toLocaleString()} DA</p>
                               </div>
                               <div className="bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg p-4 border border-emerald-600 dark:border-emerald-400">
-                                <p className="text-xs text-white font-semibold mb-1">Total (TTC)</p>
+                                <p className="text-xs text-white font-semibold mb-1">{t('common.total_with_tva')}</p>
                                 <p className="text-2xl font-bold text-white">{totalWithTva.toLocaleString()} DA</p>
                               </div>
                             </>
@@ -1440,7 +1440,7 @@ export default function BonsCommandesPage() {
                         <div key={idx} className="bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-600 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
                           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
                             <div className="md:col-span-2">
-                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Product Name *</label>
+                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('bonCommandes.product_name_required')} *</label>
                               <Input
                                 value={product.product_name}
                                 onChange={(e) => handleProductChange(idx, 'product_name', e.target.value)}
@@ -1449,16 +1449,16 @@ export default function BonsCommandesPage() {
                               />
                             </div>
                             <div>
-                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Barcode</label>
+                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('common.barcode')}</label>
                               <Input
                                 value={product.barcode || ''}
                                 onChange={(e) => handleProductChange(idx, 'barcode', e.target.value)}
-                                placeholder="Barcode"
+                                placeholder={t('common.barcode')}
                                 className="text-sm border-indigo-300 dark:border-indigo-600 focus:border-indigo-500 focus:ring-indigo-500"
                               />
                             </div>
                             <div>
-                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Qty</label>
+                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('bonCommandes.qty_short')}</label>
                               <Input
                                 type="number"
                                 value={product.quantity}
@@ -1469,7 +1469,7 @@ export default function BonsCommandesPage() {
                               />
                             </div>
                             <div>
-                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Unit Price (DA)</label>
+                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('bonCommandes.unit_price_da')}</label>
                               <Input
                                 type="number"
                                 value={product.unity_price}
@@ -1495,7 +1495,7 @@ export default function BonsCommandesPage() {
                           </div>
                           <div className="flex justify-between items-center">
                             <div className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-lg px-4 py-3 font-bold text-sm">
-                              💰 Total: {((product.quantity * product.unity_price) * (1 + product.tva_rate / 100)).toLocaleString('en-US', { maximumFractionDigits: 2 })} DA
+                              💰 {t('bonCommandes.product_total')}: {((product.quantity * product.unity_price) * (1 + product.tva_rate / 100)).toLocaleString('en-US', { maximumFractionDigits: 2 })} DA
                             </div>
                             <Button
                               size="sm"
@@ -1503,7 +1503,7 @@ export default function BonsCommandesPage() {
                               onClick={() => handleRemoveProductRow(idx)}
                               className="gap-1"
                             >
-                              <Trash2 className="w-4 h-4" /> Remove
+                              <Trash2 className="w-4 h-4" /> {t('bonCommandes.remove')}
                             </Button>
                           </div>
                         </div>
@@ -1572,17 +1572,17 @@ export default function BonsCommandesPage() {
                         <div key={idx} className="bg-white dark:bg-slate-800 border border-orange-200 dark:border-orange-600 rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                             <div>
-                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Supplier *</label>
+                              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('common.supplier')} *</label>
                               {suppliers.length === 0 ? (
-                                <Input 
-                                  disabled 
-                                  placeholder="No suppliers available" 
+                                <Input
+                                  disabled
+                                  placeholder={t('bonCommandes.no_suppliers_available')}
                                   className="text-sm"
                                 />
                               ) : (
                                 <Select value={offer.supplier_name} onValueChange={(v) => handleOfferChange(idx, 'supplier_name', v)}>
                                   <SelectTrigger className="text-sm border-orange-300 dark:border-orange-600 focus:border-orange-500">
-                                    <SelectValue placeholder="Select supplier..." />
+                                    <SelectValue placeholder={t('bonCommandes.select_supplier_placeholder')} />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {suppliers.map(s => (
@@ -1595,25 +1595,25 @@ export default function BonsCommandesPage() {
                           </div>
 
                           <div className="mb-4">
-                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">Notes & Comments</label>
+                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2">{t('bonCommandes.notes_comments')}</label>
                             <Textarea
                               value={offer.notes || ''}
                               onChange={(e) => handleOfferChange(idx, 'notes', e.target.value)}
-                              placeholder="Add any additional notes about this offer..."
+                              placeholder={t('common.enter_note')}
                               className="text-sm border-orange-300 dark:border-orange-600 focus:border-orange-500 focus:ring-orange-500 h-24 resize-none"
                             />
                           </div>
 
                           <div className="mb-4">
-                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-3">Upload Offer Image</label>
+                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-3">{t('bonCommandes.view_title')} - {t('common.upload_pictures')}</label>
                             <div className="flex gap-3 items-center">
                               <label className="flex-1 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-orange-300 dark:border-orange-600 rounded-lg p-4 cursor-pointer hover:border-orange-500 dark:hover:border-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-all">
                                 <ImagePlus className="w-5 h-5 text-orange-600 dark:text-orange-400" />
                                 <div className="text-center">
                                   <p className="text-sm font-medium text-orange-700 dark:text-orange-300">
-                                    {uploadingImage === idx ? '⏳ Uploading...' : '📸 Click or drag image'}
+                                    {uploadingImage === idx ? `⏳ ${t('bonCommandes.uploading')}` : `📸 ${t('bonCommandes.click_or_drag')}`}
                                   </p>
-                                  <p className="text-xs text-slate-500">PNG, JPG up to 5MB</p>
+                                  <p className="text-xs text-slate-500">{t('bonCommandes.png_jpg_5mb')}</p>
                                 </div>
                                 <input
                                   type="file"
@@ -1647,7 +1647,7 @@ export default function BonsCommandesPage() {
                               onClick={() => handleRemoveOfferRow(idx)}
                               className="gap-1"
                             >
-                              <Trash2 className="w-4 h-4" /> Remove Offer
+                              <Trash2 className="w-4 h-4" /> {t('bonCommandes.remove_offer')}
                             </Button>
                           </div>
                         </div>
@@ -1661,14 +1661,14 @@ export default function BonsCommandesPage() {
                         onClick={handleAddOfferRow}
                         className="flex-1 border-orange-300 text-orange-700 dark:border-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-semibold"
                       >
-                        <Plus className="w-4 h-4 mr-2" /> Add Another Offer
+                        <Plus className="w-4 h-4 mr-2" /> {t('bonCommandes.add_another_offer')}
                       </Button>
                       <Button
                         size="lg"
                         onClick={handleSaveOffers}
                         className="flex-1 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 text-white font-semibold shadow-md hover:shadow-lg transition-all"
                       >
-                        <Save className="w-4 h-4 mr-2" /> Save All Offers
+                        <Save className="w-4 h-4 mr-2" /> {t('bonCommandes.save_all_offers')}
                       </Button>
                     </div>
                   </div>

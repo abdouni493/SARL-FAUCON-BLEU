@@ -170,7 +170,7 @@ export default function CreateProductPage() {
       navigate('/storage-management');
     } catch (error) {
       console.error('Error creating product:', error);
-      alert('Error creating product. Please try again.');
+      alert(t('common.error'));
     } finally {
       setLoading(false);
     }

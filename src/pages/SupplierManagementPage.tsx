@@ -163,7 +163,7 @@ export default function SupplierManagementPage() {
       resetForm();
     } catch (error) {
       console.error('Error saving supplier:', error);
-      alert('Error saving supplier');
+      alert(t('common.error_saving_supplier'));
     }
   };
 
@@ -183,7 +183,7 @@ export default function SupplierManagementPage() {
       setDeleteId(null);
     } catch (error) {
       console.error('Error deleting supplier:', error);
-      alert('Error deleting supplier');
+      alert(t('common.error_deleting_supplier'));
     }
   };
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,6 +13,7 @@ import {
   Printer, Download, Loader, AlertCircle, Eye, Package2, Truck, Home, Briefcase,
   DollarSign, Calendar, ShoppingCart, FileJson, X
 } from 'lucide-react';
+import { PrintLanguageDialog } from '@/components/PrintLanguageDialog';
 
 export default function BudgetPage() {
   const { t, i18n } = useTranslation();
@@ -26,6 +27,8 @@ export default function BudgetPage() {
   const [companyInfo, setCompanyInfo] = useState<any>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [filterCategory, setFilterCategory] = useState('');
+  const [pendingPrintReport, setPendingPrintReport] = useState(false);
+  const [printLanguage, setPrintLanguage] = useState<'ar' | 'fr' | null>(null);
 
   // Load company info on mount
   useEffect(() => {
@@ -222,7 +225,7 @@ export default function BudgetPage() {
       setShowReport(true);
     } catch (err) {
       console.error('Error generating report:', err);
-      alert('Error generating report. Please try again.');
+      alert(t('common.error_generating_report'));
     } finally {
       setLoading(false);
     }
@@ -337,30 +340,47 @@ export default function BudgetPage() {
           data={reportData} 
           onClose={() => setShowReport(false)}
           t={t}
+          printLanguage={printLanguage}
+          onPrintComplete={() => setPrintLanguage(null)}
         />
       )}
+
+      {/* Print Language Chooser Dialog */}
+      <PrintLanguageDialog
+        open={pendingPrintReport && !printLanguage}
+        onOpenChange={() => setPendingPrintReport(false)}
+        onPrintArabic={() => {
+          setPrintLanguage('ar');
+        }}
+        onPrintFrench={() => {
+          setPrintLanguage('fr');
+        }}
+        title={`${t('common.print')} - ${t('budget.financial_report')}`}
+      />
     </div>
   );
 }
 
 // Comprehensive Report Display Component (Inline)
-function ReportDisplay({ data, onClose, t }: any) {
+function ReportDisplay({ data, onClose, t, printLanguage, onPrintComplete }: any) {
   const { i18n } = useTranslation();
   const isRTL = i18n.language === 'ar';
   const activeLabel = t('budget.active_label');
   const inactiveLabel = t('budget.inactive_label');
   const statusLabel = t('budget.status');
   const amountLabel = t('budget.amount');
-  const handlePrintReport = () => {
+  
+  const handlePrintReport = useCallback((lang: 'ar' | 'fr') => {
+    const isRTLLang = lang === 'ar';
     const printHTML = `
       <!DOCTYPE html>
-      <html dir="${isRTL ? 'rtl' : 'ltr'}" lang="${i18n.language}">
+      <html dir="${isRTLLang ? 'rtl' : 'ltr'}" lang="${lang}">
       <head>
         <meta charset="UTF-8">
         <title>${t('budget.financial_report')}</title>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: ${isRTL ? "'Noto Sans Arabic', " : ""}'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; }
+          body { font-family: ${isRTLLang ? "'Noto Sans Arabic', " : ""}'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; }
           .print-container { padding: 40px; background: white; max-width: 1200px; margin: 0 auto; }
           
           /* Header */
@@ -617,7 +637,7 @@ function ReportDisplay({ data, onClose, t }: any) {
               <div class="section-title">💳 ${t('budget.worker_expenses')}</div>
               <div class="stats-grid grid-2">
                 <div class="stat-item">
-                  <div class="stat-label">Total Expenses</div>
+                  <div class="stat-label">${t('budget.total_expenses')}</div>
                   <div class="stat-value">${data.workerExpenses.total.toLocaleString()} DA</div>
                 </div>
                 <div class="stat-item">
@@ -632,7 +652,7 @@ function ReportDisplay({ data, onClose, t }: any) {
               <div class="section-title">🏢 ${t('budget.enterprise_expenses')}</div>
               <div class="stats-grid grid-2">
                 <div class="stat-item">
-                  <div class="stat-label">Total Expenses</div>
+                  <div class="stat-label">${t('budget.total_expenses')}</div>
                   <div class="stat-value">${data.enterpriseExpenses.total.toLocaleString()} DA</div>
                 </div>
                 <div class="stat-item">
@@ -807,7 +827,17 @@ function ReportDisplay({ data, onClose, t }: any) {
         printWindow.print();
       }, 250);
     }
-  };
+  }, [data, t, isRTL]);
+
+  // Trigger print when language is selected
+  useEffect(() => {
+    if (printLanguage) {
+      setTimeout(() => {
+        handlePrintReport(printLanguage);
+        onPrintComplete();
+      }, 100);
+    }
+  }, [printLanguage, onPrintComplete, handlePrintReport]);
 
   const handleExportPDF = () => {
     alert(t('budget.pdf_coming_soon'));
@@ -1073,7 +1103,7 @@ function ReportDisplay({ data, onClose, t }: any) {
         className="no-print sticky bottom-0 bg-white dark:bg-slate-900 border-t border-blue-200 dark:border-slate-700 p-4 rounded-t-lg shadow-lg flex gap-2 justify-end flex-wrap"
       >
         <Button variant="outline" onClick={onClose}>{t('budget.close_report')}</Button>
-        <Button className="btn-gradient gap-2" onClick={handlePrintReport}>
+        <Button className="btn-gradient gap-2" onClick={() => setPendingPrintReport(true)}>
           <Printer className="w-4 h-4" /> {t('budget.print_report')}
         </Button>
         <Button className="btn-gradient gap-2" onClick={handleExportPDF}>

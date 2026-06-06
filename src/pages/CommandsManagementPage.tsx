@@ -319,7 +319,7 @@ export default function CommandsManagementPage() {
       setVerifyingId(null);
     } catch (error) {
       console.error('Error deducting products:', error);
-      alert('Error deducting products from inventory');
+      alert(t('common.error'));
     }
   };
 

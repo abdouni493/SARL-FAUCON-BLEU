@@ -16,6 +16,7 @@ import {
   DollarSign, Calendar, ShoppingCart, FileJson, X, Filter, RefreshCw, Plus, Search,
   ChevronDown, ArrowRight
 } from 'lucide-react';
+import { PrintLanguageDialog } from '@/components/PrintLanguageDialog';
 
 interface FilterOptions {
   dateRangeType: 'custom' | 'thisMonth' | 'lastMonth' | 'thisQuarter' | 'thisYear';
@@ -69,6 +70,7 @@ export default function EnhancedFinancialReportPage() {
   const [reportData, setReportData] = useState<any>(null);
   const [showReport, setShowReport] = useState(false);
   const [companyInfo, setCompanyInfo] = useState<any>(null);
+  const [pendingPrintReport, setPendingPrintReport] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -357,7 +359,7 @@ export default function EnhancedFinancialReportPage() {
       setShowReport(true);
     } catch (err) {
       console.error('Error generating report:', err);
-      alert('Error generating report. Please try again.');
+      alert(t('common.error_generating_report'));
     } finally {
       setLoading(false);
     }
@@ -727,13 +729,28 @@ export default function EnhancedFinancialReportPage() {
           t={t}
         />
       )}
+
+      {/* Print Language Chooser Dialog */}
+      <PrintLanguageDialog
+        open={pendingPrintReport}
+        onOpenChange={() => setPendingPrintReport(false)}
+        onPrintArabic={() => {
+          handlePrintReport('ar');
+          setPendingPrintReport(false);
+        }}
+        onPrintFrench={() => {
+          handlePrintReport('fr');
+          setPendingPrintReport(false);
+        }}
+        title={`${t('common.print')} - ${t('nav.reports') || 'Financial Report'}`}
+      />
     </div>
   );
 }
 
 // Enhanced Report Display Component
 function EnhancedReportDisplay({ data, onClose, t }: any) {
-  const handlePrintReport = () => {
+  const handlePrintReport = (lang: 'ar' | 'fr') => {
     window.print();
   };
 
@@ -896,7 +913,7 @@ function EnhancedReportDisplay({ data, onClose, t }: any) {
         <Button variant="outline" onClick={onClose}>
           {t('common.close_report') || 'Close'}
         </Button>
-        <Button className="btn-gradient gap-2" onClick={handlePrintReport}>
+        <Button className="btn-gradient gap-2" onClick={() => setPendingPrintReport(true)}>
           <Printer className="w-4 h-4" /> {t('common.print') || 'Print'}
         </Button>
         <Button className="btn-gradient gap-2" onClick={handleExportExcel}>

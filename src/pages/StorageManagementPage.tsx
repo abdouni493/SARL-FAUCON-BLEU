@@ -208,7 +208,7 @@ export default function StorageManagementPage() {
       resetForm();
     } catch (error) {
       console.error('Error saving product:', error);
-      alert('Error saving product');
+      alert(t('common.error_saving'));
     }
   };
 
@@ -228,7 +228,7 @@ export default function StorageManagementPage() {
       setDeleteId(null);
     } catch (error) {
       console.error('Error deleting product:', error);
-      alert('Error deleting product');
+      alert(t('common.error_deleting'));
     }
   };
 

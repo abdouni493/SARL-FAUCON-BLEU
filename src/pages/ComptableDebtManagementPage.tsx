@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { FileText, Plus, Edit3, Trash2, CreditCard, Search, AlertCircle, CheckCircle, Clock, Printer, Eye, BarChart3, HandCoins, TrendingUp } from 'lucide-react';
-import { buildPrintHTML, openPrintWindow, formatDateLocale } from '@/lib/printUtils';
+import { buildPrintHTML, openPrintWindow, formatDateLocale, getPrintLabels } from '@/lib/printUtils';
+import { PrintLanguageDialog } from '@/components/PrintLanguageDialog';
 
 // ============================================================================
 // INTERFACES
@@ -96,6 +97,9 @@ export default function ComptableDebtManagementPage() {
   const [viewPaymentsDebtId, setViewPaymentsDebtId] = useState<string | null>(null);
   const [debtPayments, setDebtPayments] = useState<DebtPayment[]>([]);
   const [viewDebt, setViewDebt] = useState<Debt | null>(null);
+
+  // Print State
+  const [pendingPrintDebt, setPendingPrintDebt] = useState<Debt | null>(null);
 
   // ==================== FETCH DATA ====================
   useEffect(() => {
@@ -188,7 +192,7 @@ export default function ComptableDebtManagementPage() {
 
   const handleCreateDebt = async () => {
     if (!selectedBonId || !supplierName || !totalPrice) {
-      setMessage('Please fill in all required fields');
+      setMessage(t('debt_management.fill_all_fields'));
       setMessageType('error');
       return;
     }
@@ -210,14 +214,14 @@ export default function ComptableDebtManagementPage() {
         console.debug('Create debt error:', error);
       }
       
-      setMessage('Debt created successfully');
+      setMessage(t('debt_management.debt_created'));
       setMessageType('success');
       setShowCreateDebt(false);
       resetCreateForm();
       await fetchData();
     } catch (err: any) {
       console.debug('Create debt exception:', err?.message);
-      setMessage('Debt created successfully');
+      setMessage(t('debt_management.debt_created'));
       setMessageType('success');
       setShowCreateDebt(false);
       resetCreateForm();
@@ -238,37 +242,39 @@ export default function ComptableDebtManagementPage() {
   };
 
   // ==================== PRINT FUNCTION ====================
-  const handlePrintDebt = (debt: Debt) => {
-    const lang = 'fr' as const;
-    const statusLabel = debt.status === 'paid' ? 'Payé' : debt.status === 'partial' ? 'Partiel' : 'En attente';
+  const handlePrintDebt = (debt: Debt, lang: 'ar' | 'fr') => {
+    const L = getPrintLabels(lang);
+    const statusLabel = debt.status === 'paid' ? (lang === 'ar' ? 'مدفوع' : 'Payé') : debt.status === 'partial' ? (lang === 'ar' ? 'دفع جزئي' : 'Partiel') : (lang === 'ar' ? 'في الانتظار' : 'En attente');
     const paidPct = debt.total_price > 0 ? ((debt.amount_paid / debt.total_price) * 100).toFixed(1) : '0';
+    const progressLabel = lang === 'ar' ? 'تقدم الدفع' : 'Progression du paiement';
+    const paidLabel = lang === 'ar' ? 'مدفوع' : 'payé';
     const body = `
       <div class="details-grid">
-        <div class="detail-item"><h3>ID Dette</h3><p>${debt.id.substring(0, 12)}</p></div>
-        <div class="detail-item"><h3>Fournisseur</h3><p>${debt.supplier_name}</p></div>
-        <div class="detail-item"><h3>Statut</h3><p>${statusLabel}</p></div>
-        <div class="detail-item"><h3>Bon de Commande</h3><p>${debt.bon_commande_id}</p></div>
-        <div class="detail-item"><h3>Date de Création</h3><p>${formatDateLocale(debt.created_at, lang)}</p></div>
-        ${debt.due_date ? `<div class="detail-item"><h3>Date d'échéance</h3><p>${formatDateLocale(debt.due_date, lang)}</p></div>` : ''}
-        ${debt.description ? `<div class="detail-item"><h3>Description</h3><p>${debt.description}</p></div>` : ''}
+        <div class="detail-item"><h3>${lang === 'ar' ? 'معرّف الدين' : 'ID Dette'}</h3><p>${debt.id.substring(0, 12)}</p></div>
+        <div class="detail-item"><h3>${lang === 'ar' ? 'المورد' : 'Fournisseur'}</h3><p>${debt.supplier_name}</p></div>
+        <div class="detail-item"><h3>${L.status}</h3><p>${statusLabel}</p></div>
+        <div class="detail-item"><h3>${lang === 'ar' ? 'بون الطلب' : 'Bon de Commande'}</h3><p>${debt.bon_commande_id}</p></div>
+        <div class="detail-item"><h3>${lang === 'ar' ? 'تاريخ الإنشاء' : 'Date de Création'}</h3><p>${formatDateLocale(debt.created_at, lang)}</p></div>
+        ${debt.due_date ? `<div class="detail-item"><h3>${lang === 'ar' ? 'تاريخ الاستحقاق' : "Date d'échéance"}</h3><p>${formatDateLocale(debt.due_date, lang)}</p></div>` : ''}
+        ${debt.description ? `<div class="detail-item"><h3>${lang === 'ar' ? 'الوصف' : 'Description'}</h3><p>${debt.description}</p></div>` : ''}
       </div>
       <div class="finance-summary">
         <div class="summary-card total">
-          <h4>Montant Total</h4>
+          <h4>${lang === 'ar' ? 'المبلغ الإجمالي' : 'Montant Total'}</h4>
           <p>${debt.total_price.toLocaleString()} DA</p>
         </div>
         <div class="summary-card paid">
-          <h4>Montant Payé</h4>
+          <h4>${lang === 'ar' ? 'المبلغ المدفوع' : 'Montant Payé'}</h4>
           <p>${debt.amount_paid.toLocaleString()} DA</p>
         </div>
         <div class="summary-card remaining">
-          <h4>Solde Restant</h4>
+          <h4>${lang === 'ar' ? 'الرصيد المتبقي' : 'Solde Restant'}</h4>
           <p>${debt.remaining_balance.toLocaleString()} DA</p>
         </div>
       </div>
       <div style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;padding:14px 16px;font-size:12px;color:#475569;">
         <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
-          <span>Progression du paiement</span><span style="font-weight:700;color:#1e3a8a;">${paidPct}% payé</span>
+          <span>${progressLabel}</span><span style="font-weight:700;color:#1e3a8a;">${paidPct}% ${paidLabel}</span>
         </div>
         <div style="width:100%;height:10px;background:#e2e8f0;border-radius:10px;overflow:hidden;">
           <div style="height:100%;width:${paidPct}%;background:linear-gradient(90deg,#1e3a8a,#3730a3);border-radius:10px;"></div>
@@ -286,7 +292,7 @@ export default function ComptableDebtManagementPage() {
 
   const handleEditDebt = async () => {
     if (!editingDebt || !editSupplierName || !editTotalPrice) {
-      setMessage('Please fill in all required fields');
+      setMessage(t('debt_management.fill_all_fields'));
       setMessageType('error');
       return;
     }
@@ -305,13 +311,13 @@ export default function ComptableDebtManagementPage() {
         console.debug('Edit debt error:', error);
       }
 
-      setMessage('Debt updated successfully');
+      setMessage(t('debt_management.debt_updated'));
       setMessageType('success');
       setEditingDebt(null);
       await fetchData();
     } catch (err: any) {
       console.debug('Edit debt exception:', err?.message);
-      setMessage('Debt updated successfully');
+      setMessage(t('debt_management.debt_updated'));
       setMessageType('success');
       setEditingDebt(null);
       await fetchData();
@@ -331,13 +337,13 @@ export default function ComptableDebtManagementPage() {
         console.debug('Delete debt error:', error);
       }
 
-      setMessage('Debt deleted successfully');
+      setMessage(t('debt_management.debt_deleted'));
       setMessageType('success');
       setDeletingDebtId(null);
       await fetchData();
     } catch (err: any) {
       console.debug('Delete debt exception:', err?.message);
-      setMessage('Debt deleted successfully');
+      setMessage(t('debt_management.debt_deleted'));
       setMessageType('success');
       setDeletingDebtId(null);
       await fetchData();
@@ -346,20 +352,20 @@ export default function ComptableDebtManagementPage() {
 
   const handlePayDebt = async () => {
     if (!payingDebt || !paymentAmount) {
-      setMessage('Please enter payment amount');
+      setMessage(t('debt_management.enter_payment_amount'));
       setMessageType('error');
       return;
     }
 
     const amount = parseFloat(paymentAmount);
     if (amount <= 0) {
-      setMessage('Payment amount must be greater than 0');
+      setMessage(t('debt_management.payment_gt_zero'));
       setMessageType('error');
       return;
     }
 
     if (amount > payingDebt.remaining_balance) {
-      setMessage(`Payment exceeds remaining balance (${payingDebt.remaining_balance.toLocaleString()} د.ج)`);
+      setMessage(`${t('debt_management.payment_exceeds_balance')} (${payingDebt.remaining_balance.toLocaleString()} ${t('common.payment_amount_currency')})`);
       setMessageType('error');
       return;
     }
@@ -392,7 +398,7 @@ export default function ComptableDebtManagementPage() {
         console.debug('Debt update error:', updateError);
       }
 
-      setMessage('Payment recorded successfully');
+      setMessage(t('debt_management.payment_recorded'));
       setMessageType('success');
       setPayingDebtId(null);
       setPaymentAmount('');
@@ -403,7 +409,7 @@ export default function ComptableDebtManagementPage() {
       await fetchData();
     } catch (err: any) {
       console.debug('Payment exception:', err?.message);
-      setMessage('Payment recorded successfully');
+      setMessage(t('debt_management.payment_recorded'));
       setMessageType('success');
       setPayingDebtId(null);
       setPaymentAmount('');
@@ -458,7 +464,7 @@ export default function ComptableDebtManagementPage() {
       {/* Header */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
         <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent mb-1">
-          Gestion des Dettes
+          {t('nav.debt_management')}
         </h1>
         <p className="text-muted-foreground text-sm">{new Date().toLocaleDateString()}</p>
       </motion.div>
@@ -656,7 +662,7 @@ export default function ComptableDebtManagementPage() {
                   <div className="flex gap-2 flex-wrap pt-2">
                     <Button 
                       size="sm" 
-                      onClick={() => handlePrintDebt(debt)} 
+                      onClick={() => setPendingPrintDebt(debt)} 
                       className="gap-1.5 flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold shadow-md hover:shadow-lg transition-all text-xs"
                     >
                       <Printer className="w-4 h-4" /> {t('debt_management.print')}
@@ -853,7 +859,7 @@ export default function ComptableDebtManagementPage() {
               </div>
               {viewDebt && (
                 <Button 
-                  onClick={() => handlePrintDebt(viewDebt)} 
+                  onClick={() => setPendingPrintDebt(viewDebt)} 
                   className="gap-2 btn-gradient font-semibold"
                 >
                   <Printer className="w-4 h-4" /> Print
@@ -1253,6 +1259,21 @@ export default function ComptableDebtManagementPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Print Language Chooser Dialog */}
+      <PrintLanguageDialog
+        open={!!pendingPrintDebt}
+        onOpenChange={() => setPendingPrintDebt(null)}
+        onPrintArabic={() => {
+          if (pendingPrintDebt) handlePrintDebt(pendingPrintDebt, 'ar');
+          setPendingPrintDebt(null);
+        }}
+        onPrintFrench={() => {
+          if (pendingPrintDebt) handlePrintDebt(pendingPrintDebt, 'fr');
+          setPendingPrintDebt(null);
+        }}
+        title={`${t('common.print')} - Gestion des Dettes`}
+      />
     </div>
   );
 }
